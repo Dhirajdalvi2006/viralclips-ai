@@ -1,318 +1,453 @@
-<p align="center"><img src="assets/banner.svg" alt="Chopify — local video clipping and captions" width="880"></p>
+# VIRALCLIPS AI
 
-# Chopify
+**Turn long videos into scored, vertical, captioned clips — on your own Windows machine.**
 
-**Turn long videos into scored, captioned shorts — locally, free, with no uploads or watermarks.**
+VIRALCLIPS AI is a local desktop web application. You give it a video (a file
+you own, a URL you have permission to process, or a channel you monitor), and
+a persistent background worker transcribes it, finds the moments most likely
+to hold attention, renders them as 1080×1920 clips with burnt-in captions,
+and puts them in a review queue where you approve, reject, download or
+publish them.
 
-<p align="center">
-  <img src="assets/demo.gif" alt="A Chopify clip with word-by-word burned-in captions" width="720">
-</p>
+Nothing is uploaded anywhere. The database, the clips and the queue all live
+in a folder on your disk.
 
-<p align="center">
-  <a href="#install-in-one-command"><b>Install</b></a> ·
-  <a href="https://mehbul.github.io/chopify/"><b>Live tour</b></a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="LICENSE">MIT License</a>
-</p>
+> **Under the hood:** the video engine is [Chopify](https://github.com/mehbul/chopify)
+> 1.4.0 (`mehbul/chopify`), used unmodified. Its engine documentation is in
+> [`docs/CHOPIFY_ENGINE.md`](docs/CHOPIFY_ENGINE.md). VIRALCLIPS AI adds the
+> application around it: a web dashboard, a durable job queue, a background
+> worker, channel monitoring, publishing, and analytics.
 
-<p align="center">
-  <a href="https://github.com/mehbul/chopify/actions/workflows/ci.yml"><img src="https://github.com/mehbul/chopify/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+">
-</p>
+---
 
-Chopify is an open-source Python app with a local browser dashboard and a CLI. Import a recording or a video URL, find moments, correct captions, review drafts, and export MP4 clips with SRT subtitles. No subscription, API key, cloud upload, or watermark. The [live site](https://mehbul.github.io/chopify/) is a product tour; the app itself runs on your computer.
+## Table of contents
 
-[Workflow guide](docs/WORKFLOWS.md) · [CLI reference](docs/CLI.md) · [Agent/API reference](docs/AGENT-API.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md)
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Starting and stopping](#starting-and-stopping)
+- [Where your data lives](#where-your-data-lives)
+- [AI provider setup](#ai-provider-setup)
+- [Daily use](#daily-use)
+- [Channel monitoring](#channel-monitoring)
+- [Publishing](#publishing)
+- [Recovery and troubleshooting](#recovery-and-troubleshooting)
+- [Running the tests](#running-the-tests)
+- [Backup](#backup)
+- [What is verified and what is not](#what-is-verified-and-what-is-not)
 
-## What can Chopify do?
+---
 
-| Feature | How it helps |
+## What it does
+
+| Capability | Detail |
 | --- | --- |
-| **Local browser dashboard** | Queue videos, watch job progress, review candidates, edit words and timestamps, and download exports. |
-| **Local video input** | Use MP4, MOV, MKV, WebM, M4V, or AVI recordings directly, or download a yt-dlp-supported URL. |
-| **Any-length sources** | Podcasts, movies, streams, and gameplay VODs work without a duration setting. Long sources switch to a resumable audio-first path automatically. |
-| **Audio and visual discovery** | A local 1 Hz audio timeline boosts reactions, laughs, impacts, and gameplay events, while cached 2 fps visual analysis catches motion spikes, scene/UI changes, faces, and action arcs. Speech-sparse and action-only sources can still produce clips. |
-| **Resumable projects** | Reuse matching downloads, transcripts, and completed renders. Retry a failed job without discarding successful clips. |
-| **Batch queue** | Add one source per line in Studio or use a JSON list in the CLI. Each video has an isolated project folder. |
-| **Caption Studio** | Choose from 13 caption looks, then tune font, size, colors, outline, shadow, cue length, position, box background, and word motion. A live overlay follows the source; automatic emphasis and emoji are optional. |
-| **Caption editor and SRT export** | Fix transcription mistakes before rendering. Burnt captions and SRT files share the same timeline, including tightened cuts. |
-| **Reusable brand presets** | Save a caption look and optional logo in JSON. A named preset, brand preset, and project override layer in that order. |
-| **Semantic clip search** | Search for a concept such as “handling rejection” using optional local Ollama embeddings, even if those exact words are absent. |
-| **Podcast split-screen** | Stack two adjustable horizontal crops in a vertical clip for fixed-camera two-person footage. |
-| **Clip selection and review** | Absolute 0–10 scoring returns every clip at 8.0+ by default, with an engine-chosen length, optional local LLM reranking, keyword or semantic search, editable times, and fast draft previews. |
-| **Social video exports** | 16:9, 9:16, or 1:1; H.264 video, AAC when source audio exists; SRT, poster, title/description/hashtag JSON. |
-| **Face tracking and cleanup** | Single-frame vertical crops follow a detected face; optional filler/silence removal and audio loudness normalization. |
+| **Local video input** | MP4, MKV, WebM, MOV, M4V, AVI. The file is validated on arrival, so a corrupt upload is refused immediately rather than failing a job minutes later. |
+| **Transcription** | Faster-Whisper, running locally on the CPU. Word-level timestamps, so captions land on the words. |
+| **Moment detection** | Audio and visual analysis across the *whole* video, then AI reranking. |
+| **AI reranking** | Groq (`openai/gpt-oss-120b`) scores the candidates. If the provider is unavailable the run degrades to deterministic heuristic scoring and says so — it never pretends an AI ran. |
+| **Rendering** | FFmpeg produces 1080×1920 H.264/AAC clips with burnt-in captions, an SRT file, a poster frame and a metadata sidecar. |
+| **Background worker** | A separate OS process. Closing the browser does not stop it; a Windows restart does not lose the queue. |
+| **Channel monitoring** | Official YouTube RSS (and the Data API when a key is configured) detect new uploads. Detection is separate from downloading: a remote download needs an explicit rights confirmation. |
+| **Review and approval** | Approve, reject, batch-approve, download the MP4 or the SRT. |
+| **Publishing** | YouTube Shorts and Instagram Reels over the official OAuth APIs, and only for clips you have approved. |
+| **Analytics** | Only real, database-derived numbers. View and engagement figures are reported as unavailable unless you connect an authorized analytics account. |
 
-Clip selection favors sentence endings with punctuation. Scores are editing suggestions, **not predictions or guarantees of virality**. Review the results before publishing.
+---
 
-## Install in one command
+## Requirements
 
-**Windows** (PowerShell):
+| | |
+| --- | --- |
+| **OS** | Windows 10 or 11 (x64) |
+| **Python** | 3.11 (the Python launcher, `py -3.11`, is used by `setup.bat`) |
+| **FFmpeg** | 9.x recommended — must be on `PATH`, or placed in `.\ffmpeg\bin\` |
+| **Disk** | ~3 GB free for the environment and models, plus room for your clips |
+| **Network** | Only for the AI provider, YouTube monitoring and publishing. The video pipeline itself is fully offline. |
 
-```powershell
-irm https://raw.githubusercontent.com/mehbul/chopify/main/install.ps1 | iex
+FFmpeg is the one hard external dependency. Everything else is installed by
+`setup.bat`.
+
+---
+
+## Installation
+
+From the project folder:
+
+```bat
+setup.bat
 ```
 
-**macOS / Linux:**
+This will:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/mehbul/chopify/main/install.sh | bash
+1. Locate Python 3.11 (via the `py` launcher, then `python`).
+2. Verify FFmpeg is available.
+3. Create `.venv\` and install everything from `requirements.txt`.
+4. Import-check the engine and initialise the local database.
+
+It never touches your clips, your database or your credential file.
+
+To check the environment without changing anything:
+
+```bat
+setup.bat --check
 ```
 
-The installer checks Git, Python 3.11+, and ffmpeg, installs anything missing when a package manager is available, clones Chopify into `./chopify`, creates `.venv`, installs the Python dependencies, and opens Studio at **http://127.0.0.1:8765**. Set `CHOPIFY_NO_START=1` to install only, or `CHOPIFY_DIR=/path` to choose the folder.
+### Manual installation
 
-Prefer to inspect before running? [install.ps1](install.ps1) and [install.sh](install.sh) are short and commented.
+If you prefer to do it by hand:
 
-<details>
-<summary><b>Manual install</b></summary>
-
-Windows is the primary target. Use **Python 3.11+** and **ffmpeg/ffprobe with libx264, AAC, and subtitle rendering support**. Linux CI also checks the Python and ffmpeg workflows.
-
-```powershell
-git clone https://github.com/mehbul/chopify.git
-cd chopify
-winget install Gyan.FFmpeg
-python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python dashboard.py
+```bat
+py -3.11 -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-</details>
+---
 
-Studio opens at **http://127.0.0.1:8765**. Paste a local video path or URL, then click **Find clips**. Add multiple sources on separate lines to queue them. After processing, review candidates, edit captions, style them in the **Captions** tab, save your settings, and export selected clips. Stop the server with Ctrl+C. To change the port:
+## Starting and stopping
 
-```powershell
-.venv\Scripts\python dashboard.py --port 8766 --projects-dir projects
+```bat
+start.bat        REM start the worker and the API, then open the browser
+stop.bat         REM stop both services
+restart.bat      REM stop, then start
+health-check.bat REM verify every dependency and report a verdict
 ```
 
-The dashboard has no extra web framework or JavaScript installation step. It binds to loopback and is intended for one trusted user on the same computer, not as a public server.
+Then open **<http://127.0.0.1:8799>**.
 
-YouTube downloads may also require Deno: `winget install DenoLand.Deno`. A preflight check reports missing Python packages and encoders. Restart your terminal after installing tools so PATH changes take effect.
+The API reference is at <http://127.0.0.1:8799/docs>.
 
-## CLI: long video to short clips
+`health-check.bat` prints `HEALTHY` and exits 0 when the application is
+running, and prints `UNHEALTHY` and exits 1 when it is not — a dead API or a
+dead worker is a failure, not a warning. Only the AI provider is a warning,
+because that one degrades gracefully to heuristic scoring. The check never
+starts or stops anything.
 
-After installing dependencies, run with the virtual environment's Python (or activate it and use `python`):
+### The same thing from a terminal
 
-```powershell
-# Print version (works with no video, ffmpeg, or network)
-python chopify.py --version
-
-# List caption style presets (works the same way)
-python chopify.py --list-styles
-
-# Local recording or online video
-python chopify.py "C:\Videos\podcast.mp4" --aspect 9:16
-python chopify.py "https://youtube.com/watch?v=VIDEO_ID"
-
-# Prepare once, inspect candidates, then render selected clips
-python chopify.py "C:\Videos\podcast.mp4" --workdir work --action prepare
-python chopify.py --project work --action render --clips 1,3 --preview
-python chopify.py --project work --action render --clips 1,3
-
-# Search the transcript using keywords or meaning
-python chopify.py "recording.mp4" --search "pricing"
-python chopify.py "recording.mp4" --semantic "advice about handling rejection"
-
-# Brand and podcast framing
-python chopify.py "podcast.mp4" --brand examples/brand.json --tighten --loudnorm
-python chopify.py "podcast.mp4" --aspect 9:16 --layout split --centers 0.25 0.75
-
-# Caption Studio from the CLI
-python chopify.py "recording.mp4" --style bold --words-per-cue 2 --caption-position top --emoji --emphasis
-python chopify.py "recording.mp4" --caption-json my-caption-style.json
-
-# Process a queue of videos into separate projects
-python chopify.py --batch examples/batch.json --projects-dir projects
+```bat
+.venv\Scripts\python.exe -m viralclips_app.service_control start --services api worker
+.venv\Scripts\python.exe -m viralclips_app.service_control status
+.venv\Scripts\python.exe -m viralclips_app.service_control stop
+.venv\Scripts\python.exe -m viralclips_app.service_control stop --services worker
 ```
 
-CLI single-video runs save state under `work/` and copy the latest exports to `clips/`. Set `--out DIR` or `CHOPIFY_OUT` to change the export folder. Dashboard and batch jobs save outputs inside `projects/<id>/clips/` and drafts inside `previews/`. **Replace the batch sample's sources with your own paths or URLs.**
+Each service records its own PID in `data\api.pid` and `data\worker.pid`, so
+stopping the application stops exactly those two processes and never touches
+an unrelated Python or Node process on your machine.
 
-Successful stages resume by default. Use `--no-resume` to reprocess, or `--project projects/<id> --action render` to retry a batch project. Use `--action render` after manual caption/clip edits; `--action prepare` recalculates candidates when selection inputs change. A failed batch job does not prevent later videos from processing; the CLI exits nonzero if any job fails.
+On Windows the virtual environment's `python.exe` is a launcher shim that
+spawns the real interpreter as a child, so each service is two processes.
+Stopping uses the recorded PID **and** the shim's own PID. The shim is only
+terminated when two independent facts hold: its executable is *this*
+project's `.venv\Scripts\python.exe`, **and** its command line names one of
+*this* project's service entry points (`worker.py` or `run_api.py`). A
+parent-child relationship on its own is never enough to kill a process, so
+another application with the same shim-and-child shape is never touched.
 
-## How clips are chosen
+### Changing the port
 
-Chopify evaluates every sentence as a possible start, builds overlapping
-candidate windows, and keeps the best natural endpoint for each start. The
-duration is chosen by the engine from a ladder that runs from 15 seconds to five
-minutes, so a strong moment is not forced into a fixed length.
+Set `VIRALCLIPS_API_PORT` before running `start.bat`:
 
-- The default minimum score is **8.0 on an absolute 0–10 scale**. A clip at
-  exactly 8.0 passes and is shown as **8.0+**.
-- Every passing clip is returned by default. Use `--max-clips N` only when you
-  want a safety cap.
-- `--preferred-len` is a soft preference, not a hard cut. The engine can pick a
-  shorter or longer natural ending when it scores better.
-- The default clip range is **15–300 seconds** (`--min-len` / `--max-len`).
-- Interactive runs ask for the minimum score and preferred length once. Pass
-  `--min-score` or `--preferred-len` to skip either question, or `--no-input` to
-  skip both for scripts and CI.
-- Zero passing clips is a real result. Chopify writes an empty selection, reports
-  the candidate score range, and does not invent a fallback clip.
-
-```powershell
-# Accept only stronger clips, prefer 45-second cuts, and never prompt
-python chopify.py "recording.mp4" --min-score 8.5 --preferred-len 45s --no-input
-
-# Interactive --action all prepares first, shows the range, and confirms
-# before rendering more than ten clips.
-python chopify.py "podcast.mp4" --action all
+```bat
+set VIRALCLIPS_API_PORT=9000
+start.bat
 ```
 
-`--explain` prints each candidate's score parts and reason. Prepare writes
-`candidates.json` (everything discovered) and `selection.json` (threshold and
-range diagnostics); `segments.json` stays the editable render contract used by
-the CLI and Studio.
+---
 
-### Audio and visual evidence for sparse sources
+## Where your data lives
 
-Clip discovery also listens to and watches the source. A single local ffmpeg
-pass builds a 1 Hz audio timeline (loudness, peaks, spectral flux, and
-transients), caches it as `audio_features.npz` beside the transcript, and reuses
-it on later prepares. Only candidate ranges are scored against that timeline; no
-audio is uploaded.
-
-The engine derives an internal profile (`talk`, `mixed`, or `gameplay/action`)
-from speech density, audio variation, and visual activity. The profile changes
-duration tie-breaks, evidence weights, and evidence floors. It never changes your
-minimum score.
-
-- Speech-sparse clips use a 7.0 text floor and stronger evidence weighting. This
-  covers gameplay, streams, and videos with little commentary.
-- A source with no transcript words uses detected audio peaks as event seeds,
-  with evenly spaced action seeds as a fallback when the track varies without a
-  sharp peak. Hooks say `event at 42s`, never a guessed semantic event.
-- A source with no words, no audio signal, and a varying picture uses evenly
-  spaced visual seeds and is scored from visual evidence alone.
-- A flat source with no words and no usable audio or visual evidence fails with
-  `No speech and no media evidence; this source cannot be scored.`
-- Missing or unreadable video files still fall back to transcript-only scoring,
-  so existing projects keep working.
-
-### Visual evidence and silent gameplay
-
-Visual evidence runs locally. A cached ffmpeg decode samples 2 frames per
-second at 160x90, and OpenCV measures motion, scene and UI changes, face
-presence, event arcs, and boundary quiet. Only the sparse baseline samples (up
-to 12 five-second windows) and shortlisted padded candidate ranges are decoded;
-results are cached by source identity and range under `visual_sections/`. The
-whole-source baseline is cached as `visual_baseline.json`. No frames are
-uploaded, and later prepares reuse the cache.
-
-- Visual scoring rewards a motion spike, a scene or UI change, a visible
-  facecam, a complete action arc, and quiet boundaries.
-- A window whose action arc stays below 0.30 is capped at 6.0, so a static
-  screen cannot pass on motion noise alone.
-- Facecam stays neutral when the source has no consistent face region.
-- Spoken clips keep sentence boundaries. For wordless clips, each boundary can
-  move up to 1.5 seconds to the nearest action onset or quiet resolution, and
-  only when the combined evidence improves.
-- Silent audio is treated as unavailable, not as a zero. Silent gameplay and
-  no-commentary PC-game footage can pass from visual evidence alone.
-- With both modalities usable, evidence blends 60% audio and 40% visual. A
-  single modality is pulled toward neutral. Visual failure falls back to audio,
-  then text; if neither modality is usable, scoring uses text alone.
-
-The score is still an editing suggestion, not a prediction of virality.
-
-### Very long sources and gameplay VODs
-
-There is no long-video toggle and no fixed duration ceiling. A source uses the
-long path when it is at least **2 hours**, its estimated download is at least
-**8 GB**, or its duration cannot be determined. Everything else keeps the
-original short-source behavior.
-
-- Long URLs download audio only. If the source has no audio, or its audio track
-  contains no speech, Chopify downloads the lowest-resolution video instead and
-  scores it from visual evidence.
-- Transcription runs in 30-minute chunks with a 30-second overlap. Completed
-  chunks are saved as `transcript.partNNN.json`, so an interrupted job resumes
-  instead of restarting.
-- Discovery scans 30-minute ownership blocks and reads up to `--max-len` of
-  context across each boundary. Completed blocks cache as
-  `candidates.partNNN.json`.
-- Rendering downloads only the selected ranges. Nearby clips share one padded
-  section (10 seconds of padding, clips within 30 seconds merged, 10-minute cap);
-  a single longer clip keeps its full range.
-- Local long files render directly and never re-download. Long URL sections cache
-  under `sections/`; previews keep them, and a successful final render removes
-  them.
-- In Studio, **Watch** on a long URL candidate renders a 480p draft from just that
-  section, plays it, and keeps candidate edits. A project with a full local video
-  seeks the source player instead.
-- If one section fails, other clips still render and successful outputs are
-  kept. The failed ranges stay cached for a later retry.
-- Global clip times, `segments.json`, caption timings, brand JSON, and default
-  16:9 output are unchanged.
-
-## Semantic search and optional local AI
-
-Default clip selection needs no LLM. For semantic search, install [Ollama](https://ollama.com), run it locally, and download an embedding model:
-
-```powershell
-ollama pull nomic-embed-text
-python chopify.py "podcast.mp4" --semantic "turning failure into a lesson"
+```
+data\
+  database\viralclips.db   the queue, clips, tasks, channels, approvals
+  videos\                   uploaded source files
+  clips\                    rendered clips, posters, SRTs, metadata
+  projects\                 per-video working folders (resumable)
+  transcripts\              transcriptions
+  logs\                     api.out.log, api.err.log, worker.out.log, worker.err.log
+  api.pid, worker.pid       process IDs of the running services
 ```
 
-The embedding model runs on `127.0.0.1:11434`. Sentence embeddings are cached per transcript/model. Use `--embed-model MODEL` for another compatible local embedding model. Semantic search ranks matches by similarity; it does not guarantee that the topic is present. Missing models produce setup instructions rather than a cloud fallback.
+The credential file lives **outside** the project, in
+`%LOCALAPPDATA%\ViralClipsAI\credentials.env`, so it is never committed and
+never travels with a copy of the project. Override the location with
+`VIRALCLIPS_CREDENTIALS_FILE`.
 
-For optional LLM-based selection, download a local chat model separately and pass `--llm MODEL`. If it is unavailable, selection falls back to the heuristic. The GPU backend for faster-whisper is CUDA/NVIDIA; CPU transcription works without an NVIDIA GPU. `--device cpu|cuda|auto` controls transcription.
+---
 
-## Is Chopify an alternative to Opus Clip?
+## AI provider setup
 
-Chopify is a free, MIT-licensed option for creators who want local clipping, captions, reframing, and review. It requires local installation and uses your computer's resources. It does not include cloud collaboration, automatic social publishing, or hosted processing. Compare the workflows and privacy requirements that matter to you; feature sets and pricing of other products change.
+Groq is the default provider. See [`docs/PROVIDER_SETUP.md`](docs/PROVIDER_SETUP.md)
+for the full guide, including the OpenRouter fallback.
 
-## Frequently asked questions
+1. Create the credential file if it does not exist:
 
-### Does video leave my computer?
+   ```bat
+   if not exist "%LOCALAPPDATA%\ViralClipsAI" mkdir "%LOCALAPPDATA%\ViralClipsAI"
+   notepad "%LOCALAPPDATA%\ViralClipsAI\credentials.env"
+   ```
 
-Chopify does not upload footage or transcripts to a hosted processing service. Video URLs require downloads. Whisper models download on first use; face tracking may download a YuNet model; optional Ollama models need an initial download. **Local-file processing can run offline once the required dependencies and models are available.**
+2. Put your key in it:
 
-### Can I correct captions and export subtitles?
+   ```
+   GROQ_API_KEY=your-key-here
+   ```
 
-Yes. Open a prepared project in Studio, choose **Transcript**, edit word text or start/end times, and **Save captions**. Export again to apply the edits. Each draft and finished clip includes an SRT file relative to that clip's timeline. See the [caption workflow](docs/WORKFLOWS.md#edit-captions-and-export-srt).
+3. Verify it:
 
-### Can I style and animate captions?
+   ```bat
+   .venv\Scripts\python.exe viralclips.py --provider-check
+   ```
 
-Yes. Open a prepared project, choose **Captions**, and start from one of 13 presets: `default`, `clean`, `minimal`, `bold`, `boxed`, `karaoke`, `pop`, `neon`, `typewriter`, `retro`, `hormozi`, `mrbeast`, or `podcast`. Adjust font, size, margin, colors, outline, shadow, box background, words per cue, position, motion, and word highlighting. **Preview 5s** plays a selected clip range with the overlay.
+The provider name and the model name are reported separately. `groq` is the
+provider; `openai/gpt-oss-120b` is the model Groq serves. The upstream
+engine writes an internal selection mode of `ollama` for any LLM-reranked
+run — that string is a legacy label from the engine and is never shown as
+the provider.
 
-The overlay approximates the libass render; the exported MP4 is authoritative. Style precedence is named preset, then brand preset, then the project's caption override. **Save as preset** stores a reusable named look under Brand presets. Automatic emphasis colors up to two numbers, money amounts, ALL-CAPS words, or power words per cue. Emoji adds one relevant emoji per cue when a rule matches, and glyphs depend on an installed system emoji font.
+Clip Review shows the attribution for each clip, with three distinct
+answers:
 
-### Does split-screen identify who is speaking?
+| Shown | Meaning |
+| --- | --- |
+| `groq` + `openai/gpt-oss-120b` | An AI actually scored this clip |
+| `not recorded` | The clip was AI-scored, but before provider attribution was stored |
+| `none (heuristic only)` | The run degraded to the deterministic scorer |
 
-No. Split-screen uses two adjustable horizontal crop centers for a fixed camera and stacks the crops vertically. It is not speaker diarization or automatic two-face tracking. Use a draft to tune the positions before final export.
+---
 
-### What happens if processing fails or Studio closes?
+## Daily use
 
-Completed stages and clips remain on disk. Restart Studio and queue the saved project again, or rerun the CLI with `--project PATH`. Interrupted jobs are marked for explicit retry. Changing the source, transcription model, selection settings, words, brand, or render options invalidates the relevant cached work. Do not run two writers against the same project directory at once.
+1. **Add New Task** — choose a source (upload, URL, or channel), set the
+   clip length, aspect, caption style and how many clips you want.
+2. **Processing Queue** — watch real progress. The worker reports each
+   stage: source, transcribe, analyse, score, render.
+3. **Generated Clips** / **Clip Review** — preview each clip, read the
+   transcript and the AI reasoning, approve or reject.
+4. **Publishing** — publish an approved clip, or batch-approve and publish.
+5. **Analytics** — real counts only.
 
-### Can it edit translated or multilingual subtitles?
+You can close the browser at any point. The worker keeps going.
 
-Whisper detects spoken language, and captions retain its transcription. The heuristic cue lists are English-oriented; punctuation and timing can vary by language. This update does not add translation, bilingual captions, or dubbing. Caption fonts must contain the glyphs you need.
+---
 
-## Developer and agent documentation
+## Channel monitoring
 
-- [Workflow guide and project layout](docs/WORKFLOWS.md)
-- [CLI flag reference](docs/CLI.md)
-- [CLI, Python interfaces, and local HTTP API](docs/AGENT-API.md)
-- [Setup and troubleshooting](docs/TROUBLESHOOTING.md)
-- [Machine-readable product facts](docs/product.json) and [llms.txt](llms.txt)
-- [Search discovery and documentation deployment](docs/DISCOVERABILITY.md)
+**Channel Monitoring** → add a channel by its `.../channel/UC...` URL.
 
-```powershell
-python -m pip install -r requirements-dev.txt
-python -m pytest tests/ -q
-python -m compileall -q chopify.py dashboard.py projects.py captions.py branding.py semantic.py download_and_transcribe.py score_clips.py render_clips.py tighten.py
+Monitoring uses YouTube's **official published RSS feed** (and the official
+Data API when a key is configured). It does not scrape and does not bypass
+any platform restriction.
+
+Detection and ingestion are deliberately separate. Finding that a video
+exists is not the same as holding the rights to download and republish it,
+so automated remote ingestion requires an explicit rights confirmation on
+the task. Without it, episodes are detected and listed, and nothing is
+downloaded.
+
+---
+
+## Publishing
+
+Publishing is off until two things are true: a platform is connected over
+OAuth, and the clip is approved.
+
+| Platform | Setup |
+| --- | --- |
+| **YouTube** | `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET` in the credential file. Create an OAuth client in the Google Cloud console with the YouTube upload scope, and set the redirect URI to `http://127.0.0.1:8799/api/accounts/youtube/callback`. |
+| **Instagram** | `INSTAGRAM_CLIENT_ID` and `INSTAGRAM_CLIENT_SECRET` in the credential file, plus `VIRALCLIPS_PUBLIC_MEDIA_URL` pointing at a publicly reachable HTTPS host for the media file. Instagram's Graph API cannot fetch a loopback address. |
+
+Both are listed on the **Connected Accounts** screen with an honest status:
+`awaiting_credentials` when the client is missing, `awaiting_authorization`
+when the client is present but the account has not been authorized yet.
+
+OAuth tokens are stored in the database and are never returned to the
+browser. The frontend only ever sees a boolean saying whether a credential
+exists.
+
+---
+
+## Recovery and troubleshooting
+
+**The browser shows "Request rejected. Reload the application and retry."**
+The API mints a fresh token when it restarts. The dashboard now refreshes
+the token and replays the request automatically. If it still fails, reload
+the page once.
+
+**A job is stuck in "running".**
+The worker reclaims interrupted jobs when it starts. To force it:
+
+```bat
+stop.bat
+start.bat
 ```
 
-Tests include real ffmpeg renders when ffmpeg is installed; speech models and Ollama are not required for the automated suite. Keep videos, transcripts, generated clips, and local brand presets out of Git. Use footage you have permission to process.
+**A job failed with "No candidates were found."**
+The source had no moment long enough to qualify. The minimum clip length is
+15 seconds, so a shorter source cannot produce a clip. This is reported
+honestly rather than silently dropped.
 
-## Contributing
+**A job failed with "No speech and no media evidence."**
+The source has neither usable speech nor usable visual activity, so there
+was nothing to score.
 
-Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and review expectations, and use [GitHub Discussions](https://github.com/mehbul/chopify/discussions) for questions and ideas.
+**The worker is not running.**
 
-## License
+```bat
+.venv\Scripts\python.exe -m viralclips_app.service_control status
+.venv\Scripts\python.exe -m viralclips_app.service_control start --services worker
+```
 
-MIT — see [LICENSE](LICENSE). You can use, fork, and ship Chopify; attribution and a link back are appreciated.
+**An orphan process is holding the port.**
 
-Maintained by [mehbul](https://github.com/mehbul). Last documentation update: **2026-11-05**.
+```bat
+.venv\Scripts\python.exe -m viralclips_app.service_control free-port 8799
+```
+
+**Checking what actually happened.** The service logs are the record:
+
+```
+data\logs\worker.out.log     the worker's own narration of every job
+data\logs\worker.err.log      errors and FFmpeg output
+data\logs\api.err.log        API errors
+```
+
+**Orphaned processes after a crash.** `cleanup_orphans.py` inspects each
+Python process's command line and only terminates ones that belong to this
+project. It supports `--dry-run`:
+
+```bat
+.venv\Scripts\python.exe cleanup_orphans.py --dry-run
+```
+
+---
+
+## Running the tests
+
+```bat
+.venv\Scripts\python.exe -m pytest tests\ -q
+```
+
+The suite covers the upstream engine, the provider adapter, and the platform
+(database, job queue, API routes, security, pipeline, frontend structure).
+The frontend is checked with `node --check` and a structural test suite; a
+separate live audit renders all twelve screens against a running API.
+
+---
+
+## Backup and storage management
+
+### Back up the database from the dashboard
+
+**Settings** → **Maintenance** → **Back up the database**.
+
+The backup is a consistent snapshot taken with SQLite's online backup
+API, not a byte-for-byte file copy — the database runs in WAL mode, so a
+plain copy of the main file can miss transactions that are still in the
+`-wal` sidecar. Backups are written to `data\backups\` as
+`viralclips-<timestamp>-<label>.db`.
+
+### Restore a backup
+
+```bat
+.venv\Scripts\python.exe -c "from viralclips_app import storage; print(storage.restore_database(r'<path to backup>.db'))"
+```
+
+The candidate file is validated first — it must be a readable SQLite
+database containing the application's tables. A file that fails the check
+is rejected and **nothing is changed**. When a restore does run, the
+current database is backed up first, so a restore is always reversible.
+
+On Windows the restore closes the database's pooled connections first,
+because Windows refuses to replace a file that still has an open handle.
+If the worker or the API is running and still holds the file, the
+restore refuses with a clear message rather than corrupting anything.
+
+### Clean up old media
+
+**Settings** → **Maintenance** → **Clean up old media**.
+
+The retention window comes from the **Keep artifacts (days)** field
+(default 30). The button runs a dry run first and shows you exactly what
+would be deleted; nothing is removed until you confirm.
+
+Cleanup never deletes:
+
+- a clip you have **approved** but not published,
+- a clip that has been **published**,
+- a clip inside the retention window.
+
+It reports how many clips and videos it removed and how much space that
+freed.
+
+### Manual backup of everything
+
+Everything worth keeping is in two places:
+
+- `data\` — database, clips, projects, transcripts
+- `%LOCALAPPDATA%\ViralClipsAI\credentials.env` — provider keys
+
+Stop the worker first so the database is not being written while you copy
+it:
+
+```bat
+stop.bat
+xcopy data D:\backup\viralclips\data /E /I /H
+copy "%LOCALAPPDATA%\ViralClipsAI\credentials.env" D:\backup\viralclips\
+start.bat
+```
+
+The database uses SQLite in WAL mode. Copying `data\database\viralclips.db`
+while the worker is running can produce a torn copy; stop the services
+first.
+
+### Disk space
+
+The application refuses to start a job when the volume has less than
+2 GB free, and says so in the job's error field rather than failing
+halfway through a render. **Settings** → **Storage** shows the free
+space, the per-directory sizes, and how many backups exist.
+
+---
+
+## What is verified and what is not
+
+Read [`FINAL_VERIFICATION_REPORT.md`](FINAL_VERIFICATION_REPORT.md) for the
+full, dated picture. In short:
+
+**Verified by real execution:** the complete test suite (646 passed, 0
+failed); the end-to-end video pipeline (transcription → Groq scoring →
+rendering → database → API), worker restart and recovery, job cancellation
+and retry, duplicate-upload prevention, corrupt-upload rejection, the
+heartbeat, disk checks, the Windows start/stop/restart lifecycle over three
+cycles, channel monitoring against a live official YouTube RSS feed, all
+twelve frontend screens, provider reporting, and the publishing approval
+gate.
+
+**Not verified:** live YouTube and Instagram publishing (no OAuth
+credentials are configured), and audience-retention figures (no authorized
+analytics exist, so none are reported).
+
+This application is **not** claimed to be production-ready. It is a working
+local tool that has been exercised end to end.
+
+---
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [`FINAL_VERIFICATION_REPORT.md`](FINAL_VERIFICATION_REPORT.md) | What was tested, what the results were, what is still unverified |
+| [`MIGRATION_REPORT.md`](MIGRATION_REPORT.md) | How the project moved from `C:\Users\dalvi\ViralClipsAI` to its current folder |
+| [`docs/PROVIDER_SETUP.md`](docs/PROVIDER_SETUP.md) | Groq, the OpenRouter fallback, credentials, model selection |
+| [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) | The platform architecture and why it is shaped this way |
+| [`docs/CHOPIFY_ENGINE.md`](docs/CHOPIFY_ENGINE.md) | The upstream engine's documentation |
+| [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) | The engine's workflow guide |
+| [`docs/CLI.md`](docs/CLI.md) | The engine's CLI reference |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | The engine's troubleshooting guide |
+
+## Licence
+
+MIT. See [`LICENSE`](LICENSE).

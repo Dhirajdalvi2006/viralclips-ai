@@ -1,23 +1,94 @@
 # local environment & large artifacts -- never commit
 .venv/
 venv/
+env/
 whisper.cpp/
 whisper_old/
 work/
 build_msvc*/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 *.onnx
 *.log
 *.sh
 !install.sh
+node_modules/
+package-lock.json
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # chopify outputs
 clips/
 projects/
 _site/
-.pytest_cache/
 
 # local AI agent state
 .mimosa/
 .zcode/
+
+# credentials -- never commit
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+secrets.json
+credentials.env
+**/credentials.env
+*_rsa.pem
+service-account*.json
+
+# VIRALCLIPS AI local data -- the database, the uploaded sources,
+# the rendered clips and the working folders are all machine-local
+# and must never enter version control.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# media artefacts -- uploads, rendered clips, thumbnails, audio
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.avi
+*.m4v
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.srt
+*.vtt
+*.thumbnails/
+
+# temporary processing files
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+*.part
+*.y4m
+
+# local backup directories
+backups/
+backup/
+*.bak/
+.viralclips/
+
+# viralclipsai local artifacts
+smoketest/
+cfg.json
+INSTALLATION_REPORT.md
