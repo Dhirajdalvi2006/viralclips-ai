@@ -339,6 +339,20 @@ created when their work actually starts -- not speculatively.
 - `v2-intelligence` merges into `main` only at a V2 release, with a new
   tag.
 
+**How changes actually land.** `main` carries branch protection: it
+requires one approving pull-request review, enforces a linear history,
+and refuses force pushes and branch deletion. `v2-intelligence` is open
+for direct pushes. So the everyday V2 loop is:
+
+```
+v2-intelligence  --push-->  feature/<name>  --PR-->  v2-intelligence
+```
+
+and only at a release does `v2-intelligence` raise a pull request into
+`main`, which then needs a review and a new tag. Direct pushes to `main`
+are rejected by the server, which is what keeps the V1.0.0 baseline
+reproducible.
+
 ---
 
 ## 6. Phasing
