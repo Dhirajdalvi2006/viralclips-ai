@@ -466,6 +466,51 @@ def repetition_penalty(moments: list[Moment]) -> None:
             max(0.0, 100.0 - min(100.0, penalty)), 2)
 
 
+def _chunk_utterances(utterances: list[Utterance], chunk_size: int = 40,
+                      overlap: int = 6) -> list[list[Utterance]]:
+    """Split utterances into overlapping chunks for analysis."""
+    if len(utterances) <= chunk_size:
+        return [list(utterances)]
+    chunks: list[list[Utterance]] = []
+    step = max(1, chunk_size - overlap)
+    start = 0
+    while start < len(utterances):
+        end = min(len(utterances), start + chunk_size)
+        chunks.append(list(utterances[start:end]))
+        if end >= len(utterances):
+            break
+        start += step
+    return chunks
+
+
+def _dedupe_moments(moments: list[Moment]) -> list[Moment]:
+    """Remove duplicate moments by temporal overlap or transcript similarity."""
+    if len(moments) <= 1:
+        return moments
+    ordered = sorted(moments, key=lambda m: (-m.score, m.start))
+    kept: list[Moment] = []
+    for candidate in ordered:
+        is_dup = False
+        for existing in kept:
+            overlap = _overlap_seconds(candidate.start, candidate.end,
+                                       existing.start, existing.end)
+            shorter = min(candidate.end - candidate.start,
+                          existing.end - existing.start)
+            if shorter > 0 and overlap / shorter > 0.5:
+                is_dup = True
+                break
+            if _words_of(candidate.text) and _words_of(existing.text):
+                a = set(_words_of(candidate.text))
+                b = set(_words_of(existing.text))
+                jaccard = len(a & b) / len(a | b) if (a | b) else 0.0
+                if jaccard > 0.7:
+                    is_dup = True
+                    break
+        if not is_dup:
+            kept.append(candidate)
+    return kept
+
+
 def _overlap(a: Moment, b: Moment) -> float:
     """Fraction of the shorter moment that is covered by the other."""
     start = max(a.start, b.start)
@@ -556,12 +601,14 @@ def _normalise_signals(raw: dict, fallback: dict) -> dict:
 def detect_moments(utterances: list[Utterance], source_path: Path | None = None,
                    count: int = 3, min_seconds: int = 15, max_seconds: int = 90,
                    provider: str | None = None, model: str | None = None,
-                   timeout: int = 180) -> IntelligenceResult:
+                   timeout: int = 180, chunk_size: int = 40,
+                   overlap: int = 6) -> IntelligenceResult:
     """Find context-aware moments and score them.
 
-    Uses the AI provider when one is configured. When it is not, the
-    offline signals are used instead and the result is marked
-    ``heuristic`` so the UI can say so.
+    The transcript is analysed in overlapping chunks so that a long video
+    does not exceed the model's attention window and a joke whose setup
+    and punchline straddle a chunk boundary is still seen in full. The
+    candidates from every chunk are merged, deduplicated and ranked.
     """
     result = IntelligenceResult()
     if not utterances:
@@ -571,6 +618,9 @@ def detect_moments(utterances: list[Utterance], source_path: Path | None = None,
     provider_name = provider or config.DEFAULT_AI_PROVIDER
     model_name = model or config.DEFAULT_AI_MODEL
 
+    # --- chunk the transcript with overlap -------------------------------
+    chunks = _chunk_utterances(utterances, chunk_size, overlap)
+
     ai_moments: list[Moment] = []
     error = None
     try:
@@ -579,28 +629,32 @@ def detect_moments(utterances: list[Utterance], source_path: Path | None = None,
         if resolved is None:
             error = (f"No credential found for provider '{provider_name}'.")
         else:
-            content = openai_compat.chat(
-                messages=[
-                    {"role": "system", "content": ANALYSIS_SYSTEM},
-                    {"role": "user", "content": (
-                        "Transcript:\n" + transcript_text(utterances))},
-                ],
-                model=model_name,
-                base_url=resolved["base_url"],
-                api_key=resolved["api_key"],
-                timeout=timeout,
-                max_tokens=4096,
-            )
-            parsed = _extract_json(content)
-            if not parsed:
-                error = "The provider did not return usable JSON."
-            else:
-                ai_moments = _moments_from_ai(parsed, utterances, min_seconds,
-                                              max_seconds)
-                if not ai_moments:
-                    error = "The provider returned no usable moments."
+            for chunk in chunks:
+                content = openai_compat.chat(
+                    messages=[
+                        {"role": "system", "content": ANALYSIS_SYSTEM},
+                        {"role": "user", "content": (
+                            "Transcript:\n" + transcript_text(chunk))},
+                    ],
+                    model=model_name,
+                    base_url=resolved["base_url"],
+                    api_key=resolved["api_key"],
+                    timeout=timeout,
+                    max_tokens=4096,
+                )
+                parsed = _extract_json(content)
+                if not parsed:
+                    if error is None:
+                        error = "The provider did not return usable JSON."
+                    continue
+                moments = _moments_from_ai(parsed, utterances, min_seconds,
+                                           max_seconds)
+                ai_moments.extend(moments)
     except Exception as exc:  # noqa: BLE001 - never break the pipeline
         error = f"{type(exc).__name__}: {exc}"
+
+    # --- deduplicate across chunks --------------------------------------
+    ai_moments = _dedupe_moments(ai_moments)
 
     if ai_moments:
         result.moments = ai_moments
@@ -608,6 +662,8 @@ def detect_moments(utterances: list[Utterance], source_path: Path | None = None,
         result.provider = provider_name
         result.model = model_name
     else:
+        if error is None:
+            error = "The provider returned no usable moments."
         result.error = error
         result.moments = _moments_offline(utterances, source_path, count,
                                           min_seconds, max_seconds)
@@ -622,6 +678,13 @@ def detect_moments(utterances: list[Utterance], source_path: Path | None = None,
     for moment in result.moments:
         moment.score = combine_signals(moment.signals)
     result.moments.sort(key=lambda m: (-m.score, m.start))
+
+    # --- quality gate: drop weak moments -------------------------------
+    result.moments = [m for m in result.moments
+                      if m.score >= 25.0
+                      and m.duration >= min_seconds * 0.6
+                      and len(_words_of(m.text)) >= 8]
+    result.moments = result.moments[:max(1, count)]
     return result
 
 
