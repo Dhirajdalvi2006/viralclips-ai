@@ -2317,6 +2317,11 @@ registerRoute('studio',
         el('button', { class: 'btn sm ghost', onclick: () => deleteSelected() }, 'Delete'),
         el('button', { class: 'btn sm ghost', onclick: () => duplicateSelected() }, 'Duplicate'),
         el('button', { class: 'btn sm ghost', onclick: () => addToAudioTimeline() }, 'Add Audio'),
+        el('button', { class: 'btn sm ghost', onclick: () => addToCaptionTimeline() }, 'Add Caption'),
+        el('button', { class: 'btn sm ghost', onclick: () => addTextOverlay('title') }, 'Add Title'),
+        el('button', { class: 'btn sm ghost', onclick: () => addTextOverlay('lower-third') }, 'Add Lower Third'),
+        el('button', { class: 'btn sm ghost', onclick: () => importSRT() }, 'Import SRT'),
+        el('button', { class: 'btn sm ghost', onclick: () => exportSRT() }, 'Export SRT'),
         el('button', { class: 'btn sm', onclick: () => saveProject() }, 'Save'),
         el('button', { class: 'btn sm primary', onclick: () => exportProject() }, 'Export')),
       el('div', { class: 'timeline-track', id: 'studio-timeline' },
@@ -2482,6 +2487,187 @@ async function generateWaveform(url) {
     console.warn('Waveform generation failed:', e);
     return null;
   }
+}
+function addToCaptionTimeline() {
+  if (!State.studioTimeline) State.studioTimeline = [];
+  const text = prompt('Caption text:');
+  if (!text) return;
+  const lastEnd = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 0);
+  State.studioTimeline.push({
+    id: 'caption_' + Date.now(),
+    type: 'caption',
+    text: text,
+    title: text.substring(0, 30),
+    start: lastEnd,
+    end: lastEnd + 3,
+    trimStart: 0,
+    trimEnd: 3,
+    // Style
+    fontFamily: 'Inter',
+    fontSize: 24,
+    fontWeight: '600',
+    textColor: '#ffffff',
+    bgColor: 'rgba(0,0,0,0.6)',
+    bgOpacity: 0.6,
+    outline: true,
+    outlineColor: '#000000',
+    shadow: true,
+    alignment: 'center',
+    position: 'bottom',
+    // Animation
+    animation: 'fade',
+    animDuration: 0.3,
+    animDelay: 0,
+    speed: 1,
+    volume: 1,
+    opacity: 1,
+    posX: 0, posY: 0, scale: 1, rotation: 0,
+    cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0,
+    aspectRatio: '16:9',
+  });
+  renderStudioTimeline();
+}
+
+function addTextOverlay(type) {
+  if (!State.studioTimeline) State.studioTimeline = [];
+  const text = prompt('Text:');
+  if (!text) return;
+  const lastEnd = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 0);
+  State.studioTimeline.push({
+    id: 'text_' + Date.now(),
+    type: 'text',
+    textType: type,
+    text: text,
+    title: text.substring(0, 30),
+    start: lastEnd,
+    end: lastEnd + 5,
+    trimStart: 0,
+    trimEnd: 5,
+    fontFamily: 'Inter',
+    fontSize: type === 'title' ? 48 : type === 'lower-third' ? 20 : 28,
+    fontWeight: '700',
+    textColor: '#ffffff',
+    bgColor: type === 'lower-third' ? 'rgba(0,0,0,0.7)' : 'transparent',
+    bgOpacity: type === 'lower-third' ? 0.7 : 0,
+    position: type === 'title' ? 'center' : type === 'lower-third' ? 'bottom-left' : 'center',
+    animation: 'fade',
+    animDuration: 0.5,
+    animDelay: 0,
+    speed: 1,
+    volume: 1,
+    opacity: 1,
+    posX: 0, posY: 0, scale: 1, rotation: 0,
+    cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0,
+    aspectRatio: '16:9',
+  });
+  renderStudioTimeline();
+}
+
+const CAPTION_PRESETS = {
+  'classic-white': { textColor: '#ffffff', bgColor: 'rgba(0,0,0,0.6)', fontSize: 24, fontWeight: '600', outline: true, shadow: true, animation: 'fade' },
+  'bold-shorts': { textColor: '#ffffff', bgColor: 'rgba(0,0,0,0.8)', fontSize: 32, fontWeight: '800', outline: true, shadow: false, animation: 'pop' },
+  'podcast-highlight': { textColor: '#ffeb3b', bgColor: 'rgba(0,0,0,0.5)', fontSize: 22, fontWeight: '700', outline: false, shadow: true, animation: 'fade' },
+  'minimal-subtitle': { textColor: '#e0e0e0', bgColor: 'transparent', fontSize: 20, fontWeight: '400', outline: false, shadow: true, animation: 'fade' },
+  'karaoke': { textColor: '#ffffff', bgColor: 'rgba(0,0,0,0.4)', fontSize: 26, fontWeight: '700', outline: true, shadow: false, animation: 'none' },
+  'news-style': { textColor: '#ffffff', bgColor: 'rgba(0,0,0,0.85)', fontSize: 20, fontWeight: '600', outline: false, shadow: false, animation: 'slide' },
+  'cinematic': { textColor: '#f5f5f5', bgColor: 'transparent', fontSize: 28, fontWeight: '300', outline: false, shadow: true, animation: 'fade' },
+  'clean-documentary': { textColor: '#ffffff', bgColor: 'rgba(0,0,0,0.4)', fontSize: 22, fontWeight: '500', outline: false, shadow: false, animation: 'fade' },
+};
+
+function applyCaptionPreset(presetName) {
+  if (!State.studioSelectedClip || State.studioSelectedClip.type !== 'caption') return;
+  const preset = CAPTION_PRESETS[presetName];
+  if (!preset) return;
+  Object.assign(State.studioSelectedClip, preset);
+  updatePropsPanel(State.studioSelectedClip);
+  renderStudioTimeline();
+}
+
+function exportSRT() {
+  const captions = (State.studioTimeline || []).filter(c => c.type === 'caption');
+  if (captions.length === 0) { alert('No captions to export.'); return; }
+  let srt = '';
+  captions.sort((a, b) => a.start - b.start).forEach((c, i) => {
+    const start = formatSRTTime(c.start);
+    const end = formatSRTTime(c.end);
+    srt += `${i + 1}\n${start} --> ${end}\n${c.text}\n\n`;
+  });
+  const blob = new Blob([srt], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'captions.srt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function formatSRTTime(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const ms = Math.round((seconds % 1) * 1000);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+}
+
+function importSRT() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.srt,.vtt';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    const captions = parseSRT(text);
+    if (!State.studioTimeline) State.studioTimeline = [];
+    for (const cap of captions) {
+      State.studioTimeline.push({
+        id: 'caption_' + Date.now() + '_' + (Date.now() % 100000),
+        type: 'caption',
+        text: cap.text,
+        title: cap.text.substring(0, 30),
+        start: cap.start,
+        end: cap.end,
+        trimStart: 0,
+        trimEnd: cap.end - cap.start,
+        fontFamily: 'Inter',
+        fontSize: 24,
+        fontWeight: '600',
+        textColor: '#ffffff',
+        bgColor: 'rgba(0,0,0,0.6)',
+        bgOpacity: 0.6,
+        outline: true,
+        outlineColor: '#000000',
+        shadow: true,
+        alignment: 'center',
+        position: 'bottom',
+        animation: 'fade',
+        animDuration: 0.3,
+        animDelay: 0,
+        speed: 1, volume: 1, opacity: 1,
+        posX: 0, posY: 0, scale: 1, rotation: 0,
+        cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0,
+        aspectRatio: '16:9',
+      });
+    }
+    renderStudioTimeline();
+  };
+  input.click();
+}
+
+function parseSRT(text) {
+  const captions = [];
+  const blocks = text.trim().split(/\n\s*\n/);
+  for (const block of blocks) {
+    const lines = block.trim().split('\n');
+    if (lines.length < 3) continue;
+    const timeMatch = lines[1].match(/(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})/);
+    if (!timeMatch) continue;
+    const start = parseInt(timeMatch[1]) * 3600 + parseInt(timeMatch[2]) * 60 + parseInt(timeMatch[3]) + parseInt(timeMatch[4]) / 1000;
+    const end = parseInt(timeMatch[5]) * 3600 + parseInt(timeMatch[6]) * 60 + parseInt(timeMatch[7]) + parseInt(timeMatch[8]) / 1000;
+    const captionText = lines.slice(2).join('\n');
+    captions.push({ text: captionText, start, end });
+  }
+  return captions;
 }
 function addToTimeline(clip) {
   if (!State.studioTimeline) State.studioTimeline = [];
