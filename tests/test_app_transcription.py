@@ -372,3 +372,27 @@ def test_groq_provider_name_and_model():
     p = gw.GroqTranscriptionProvider(model="whisper-large-v3")
     assert p.name == "groq"
     assert p.model == "whisper-large-v3"
+
+
+def test_parse_response_preserves_top_level_request_id():
+    parsed = gw._parse_response({
+        "text": "hello",
+        "duration": 1.0,
+        "request_id": "req-123",
+        "segments": [{"start": 0, "end": 1, "text": "hello"}],
+    })
+    assert parsed.request_id == "req-123"
+
+
+def test_oversized_audio_with_unavailable_duration_fails_before_upload(
+        tmp_path):
+    audio_file = tmp_path / "large.flac"
+    audio_file.write_bytes(b"x" * 1024)
+    with mock.patch(
+            "subprocess.run",
+            return_value=mock.MagicMock(returncode=1, stdout="", stderr="ffprobe failed")):
+        with mock.patch(
+                "viralclips_app.transcription.groq_whisper.file_size_mb",
+                return_value=30.0):
+            with pytest.raises(gw.GroqTranscriptionError, match="ffprobe"):
+                gw._chunk_audio(audio_file, target_mb=15.0)
