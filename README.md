@@ -49,7 +49,7 @@ in a folder on your disk.
 | Capability | Detail |
 | --- | --- |
 | **Local video input** | MP4, MKV, WebM, MOV, M4V, AVI. The file is validated on arrival, so a corrupt upload is refused immediately rather than failing a job minutes later. |
-| **Transcription** | Faster-Whisper, running locally on the CPU. Word-level timestamps, so captions land on the words. |
+| **Transcription** | Groq Whisper cloud transcription (preferred in auto mode when a Groq key is configured), or local Faster-Whisper. Both produce timestamped transcripts for captions. |
 | **Moment detection** | Audio and visual analysis across the *whole* video, then AI reranking. |
 | **AI reranking** | Groq (`openai/gpt-oss-120b`) scores the candidates. If the provider is unavailable the run degrades to deterministic heuristic scoring and says so — it never pretends an AI ran. |
 | **Rendering** | FFmpeg produces 1080×1920 H.264/AAC clips with burnt-in captions, an SRT file, a poster frame and a metadata sidecar. |
@@ -69,7 +69,7 @@ in a folder on your disk.
 | **Python** | 3.11 (the Python launcher, `py -3.11`, is used by `setup.bat`) |
 | **FFmpeg** | 9.x recommended — must be on `PATH`, or placed in `.\ffmpeg\bin\` |
 | **Disk** | ~3 GB free for the environment and models, plus room for your clips |
-| **Network** | Only for the AI provider, YouTube monitoring and publishing. The video pipeline itself is fully offline. |
+| **Network** | Required for Groq transcription/reasoning, YouTube monitoring and publishing. With local Faster-Whisper and no external reasoning provider, transcription can stay on-device. |
 
 FFmpeg is the one hard external dependency. Everything else is installed by
 `setup.bat`.
@@ -223,6 +223,39 @@ answers:
 | `none (heuristic only)` | The run degraded to the deterministic scorer |
 
 ---
+
+## Transcription provider selection
+
+Automatic mode prefers Groq transcription when a Groq credential is present.
+This is important on Windows systems where Smart App Control or Code
+Integrity may block the native CTranslate2 extension used by
+Faster-Whisper. Groq mode sends the extracted audio to Groq; it does not
+load Faster-Whisper or CTranslate2.
+
+Set the provider before starting the API and worker:
+
+```bat
+set VIRALCLIPS_TRANSCRIPTION_PROVIDER=auto
+```
+
+Supported values:
+
+| Value | Behaviour |
+| --- | --- |
+| `auto` | Prefer Groq when a key is configured; otherwise use Faster-Whisper. |
+| `groq` | Use Groq only. Fail clearly if its key is missing or the provider is disabled. |
+| `faster_whisper` | Use local Faster-Whisper only. Never switch providers silently. |
+
+Optional controls:
+
+- `VIRALCLIPS_GROQ_TRANSCRIPTION_ENABLED=0` disables Groq transcription.
+- `VIRALCLIPS_LOCAL_TRANSCRIPTION_ENABLED=0` disables local Faster-Whisper.
+- `VIRALCLIPS_GROQ_TRANSCRIPTION_MODEL` selects the Groq speech model (default: `whisper-large-v3-turbo`).
+
+After changing variables, restart both API and worker with `restart.bat`.
+The worker inherits the environment from its launcher, so set variables in
+the same terminal/session that starts the application. Provider and model
+attribution are written into each transcript.
 
 ## Daily use
 
