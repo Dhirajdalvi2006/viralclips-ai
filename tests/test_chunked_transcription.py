@@ -123,7 +123,8 @@ def test_transcribe_dispatches_to_chunked(tmp_path, monkeypatch):
     download_and_transcribe.transcribe(
         tmp_path / "audio.m4a", tmp_path, "tiny", "cpu", "int8", 9000,
         chunked=True, source="https://example.com/v", media_kind="audio",
-        render_from_sections=True, identity="abc", progress=lambda *a: None)
+        render_from_sections=True, identity="abc", progress=lambda *a: None,
+        provider="faster_whisper")
     assert seen["source"] == "https://example.com/v"
     assert seen["media_kind"] == "audio"
     assert seen["render_from_sections"] is True

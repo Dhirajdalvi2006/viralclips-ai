@@ -180,6 +180,11 @@ def _parse_response(data: dict, offset: float = 0.0) -> TranscriptionResult:
         except (TypeError, ValueError):
             continue
 
+    x_groq = data.get("x_groq")
+    request_id = data.get("request_id")
+    if not request_id and isinstance(x_groq, dict):
+        request_id = x_groq.get("id")
+
     return TranscriptionResult(
         text=text.strip(),
         language=language,
@@ -188,8 +193,7 @@ def _parse_response(data: dict, offset: float = 0.0) -> TranscriptionResult:
         words=words,
         provider="groq",
         model=data.get("model", "") or "",
-        request_id=data.get("request_id") or data.get("x_groq", {}).get(
-            "id") if isinstance(data.get("x_groq"), dict) else None,
+        request_id=request_id,
         raw=data,
     )
 
@@ -204,6 +208,7 @@ def _chunk_audio(audio_path: Path, target_mb: float = CHUNK_TARGET_MB,
     import json as _json
     import subprocess as _sp
 
+    size_mb = file_size_mb(audio_path)
     duration = None
     result = _sp.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -215,10 +220,16 @@ def _chunk_audio(audio_path: Path, target_mb: float = CHUNK_TARGET_MB,
         except (ValueError, KeyError, TypeError):
             duration = None
     if not duration or duration <= 0:
-        # Cannot chunk without a duration; transcribe as-is.
+        # Sending an oversized original file would only fail with HTTP 413.
+        # Never pretend that an unchunked request is safe when its duration
+        # could not be probed.
+        if size_mb > target_mb:
+            raise GroqTranscriptionError(
+                f"audio is {size_mb:.1f} MB, above the safe chunk target "
+                f"of {target_mb:.1f} MB, and ffprobe could not determine "
+                "its duration for chunking.")
         return [(audio_path, 0.0)]
 
-    size_mb = file_size_mb(audio_path)
     if size_mb <= target_mb:
         return [(audio_path, 0.0)]
 
@@ -341,8 +352,12 @@ class GroqTranscriptionProvider:
         api_key = _api_key()
 
         audio = Path(audio_path)
-        chunks = _chunk_audio(audio, target_mb=getattr(self, "_chunk_target_mb", 15.0),
-                             overlap=OVERLAP_SECONDS)
+        target_mb = min(
+            float(getattr(self, "_chunk_target_mb", CHUNK_TARGET_MB)),
+            float(self.max_file_mb) * 0.8,
+        )
+        chunks = _chunk_audio(
+            audio, target_mb=target_mb, overlap=OVERLAP_SECONDS)
 
         results: list[tuple[TranscriptionResult, float]] = []
         try:

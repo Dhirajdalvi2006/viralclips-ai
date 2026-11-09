@@ -106,8 +106,8 @@ if (not os.environ.get("VIRALCLIPS_LLM_FALLBACK")
 
 # --- transcription --------------------------------------------------------
 
-#: Transcription provider: "auto" (try local, fall back to Groq on a
-#: blocked DLL), "groq" (Groq Whisper only) or "local" (Faster-Whisper).
+#: Transcription provider: "auto" (prefer Groq when credentials exist),
+#: "groq" (Groq Whisper only) or "faster_whisper" (local only).
 DEFAULT_TRANSCRIPTION_PROVIDER = os.environ.get(
     "VIRALCLIPS_TRANSCRIPTION_PROVIDER", "auto")
 
