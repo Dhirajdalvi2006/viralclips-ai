@@ -68,20 +68,8 @@ def _download(url, workdir):
     return vids[0].resolve()
 
 
-def transcribe(video, workdir, model_size, device, compute_type, duration=None,
-               chunked=False, source=None, media_kind="video",
-               render_from_sections=False, identity=None, progress=None,
-               resume=True, provider=None):
-    """Transcribe with an explicitly selected backend.
-
-    Auto mode prefers Groq when a credential is configured, avoiding an
-    unnecessary CTranslate2 import on hosts where Windows policy blocks it.
-    If Groq is not configured, auto uses Faster-Whisper. Explicit provider
-    selections never silently change providers.
-    """
-    workdir = Path(workdir)
-    workdir.mkdir(parents=True, exist_ok=True)
-
+def resolve_transcription_provider(provider=None):
+    """Resolve the provider once, before any local native dependency loads."""
     provider = (provider or os.environ.get(
         "VIRALCLIPS_TRANSCRIPTION_PROVIDER", "auto")).strip().lower()
     if provider in {"local", "faster-whisper", "faster_whisper"}:
@@ -100,23 +88,41 @@ def transcribe(video, workdir, model_size, device, compute_type, duration=None,
     if provider == "faster_whisper" and not local_enabled:
         raise RuntimeError("Local Faster-Whisper transcription is disabled.")
 
-    use_groq = provider == "groq"
     if provider == "auto":
-        # Resolve Groq credentials before importing Faster-Whisper/CTranslate2.
         if groq_enabled:
             try:
                 from viralclips_app.transcription.groq_whisper import _api_key
                 _api_key()
-                use_groq = True
+                return "groq"
             except Exception as exc:
                 print(
                     "Groq transcription is not configured "
                     f"({type(exc).__name__}); checking local provider.",
                     flush=True)
-        if not use_groq and not local_enabled:
+        if not local_enabled:
             raise RuntimeError(
                 "No transcription provider is available: Groq is not "
                 "configured and local transcription is disabled.")
+        return "faster_whisper"
+    return provider
+
+
+def transcribe(video, workdir, model_size, device, compute_type, duration=None,
+               chunked=False, source=None, media_kind="video",
+               render_from_sections=False, identity=None, progress=None,
+               resume=True, provider=None):
+    """Transcribe with an explicitly selected backend.
+
+    Auto mode prefers Groq when a credential is configured, avoiding an
+    unnecessary CTranslate2 import on hosts where Windows policy blocks it.
+    If Groq is not configured, auto uses Faster-Whisper. Explicit provider
+    selections never silently change providers.
+    """
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    selected_provider = resolve_transcription_provider(provider)
+    use_groq = selected_provider == "groq"
 
     if use_groq:
         return _transcribe_with_groq(
@@ -131,7 +137,7 @@ def transcribe(video, workdir, model_size, device, compute_type, duration=None,
                 render_from_sections=render_from_sections, identity=identity,
                 progress=progress, resume=resume)
         except Exception as exc:
-            if provider == "auto":
+            if selected_provider == "faster_whisper" and (provider is None or provider == "auto"):
                 raise RuntimeError(
                     "Auto selected local Faster-Whisper because no Groq "
                     "credential was available, but local transcription "
@@ -144,7 +150,7 @@ def transcribe(video, workdir, model_size, device, compute_type, duration=None,
         model = _load_model(model_size, device, compute_type)
         seg_list, words, language, info_duration = _transcribe_media(model, video)
     except Exception as exc:
-        if provider == "auto":
+        if selected_provider == "faster_whisper" and (provider is None or provider == "auto"):
             raise RuntimeError(
                 "Auto selected local Faster-Whisper because no Groq "
                 "credential was available, but local transcription failed. "
