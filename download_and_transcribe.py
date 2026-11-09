@@ -380,6 +380,8 @@ def transcribe_chunked(video, workdir, model_size, device, compute_type,
         "source": str(source or video),
         "source_duration": total,
         "source_identity": identity,
+        "transcription_provider": "faster_whisper",
+        "transcription_model": model_size,
     }
     out = workdir / "transcript.json"
     _atomic_json(out, transcript)
