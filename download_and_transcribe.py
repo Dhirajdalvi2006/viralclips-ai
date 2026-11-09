@@ -131,26 +131,26 @@ def transcribe(video, workdir, model_size, device, compute_type, duration=None,
                 render_from_sections=render_from_sections, identity=identity,
                 progress=progress, resume=resume)
         except Exception as exc:
-            if "DLL load failed" in str(exc) or "Application Control" in str(exc):
-                print(f"faster-whisper blocked by system policy ({exc}); "
-                      f"falling back to Groq transcription.", flush=True)
-                return _transcribe_with_groq(
-                    video, workdir, duration=duration, source=source,
-                    media_kind=media_kind, render_from_sections=render_from_sections,
-                    identity=identity, progress=progress)
+            if provider == "auto":
+                raise RuntimeError(
+                    "Auto selected local Faster-Whisper because no Groq "
+                    "credential was available, but local transcription "
+                    "failed. Configure GROQ_API_KEY and select the groq "
+                    "provider to avoid the local CTranslate2 dependency. "
+                    f"Underlying error: {type(exc).__name__}: {exc}") from exc
             raise
 
     try:
         model = _load_model(model_size, device, compute_type)
         seg_list, words, language, info_duration = _transcribe_media(model, video)
     except Exception as exc:
-        if "DLL load failed" in str(exc) or "Application Control" in str(exc):
-            print(f"faster-whisper blocked by system policy ({exc}); "
-                  f"falling back to Groq transcription.", flush=True)
-            return _transcribe_with_groq(
-                video, workdir, duration=duration, source=source,
-                media_kind=media_kind, render_from_sections=render_from_sections,
-                identity=identity, progress=progress)
+        if provider == "auto":
+            raise RuntimeError(
+                "Auto selected local Faster-Whisper because no Groq "
+                "credential was available, but local transcription failed. "
+                "Configure GROQ_API_KEY and select the groq provider to avoid "
+                "the local CTranslate2 dependency. "
+                f"Underlying error: {type(exc).__name__}: {exc}") from exc
         raise
 
     total = float(duration) if duration is not None else float(info_duration)
