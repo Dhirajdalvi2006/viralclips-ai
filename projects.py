@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+import os
 import re
 import time
 import uuid
@@ -45,6 +46,29 @@ def file_identity(path):
     path = Path(path).resolve()
     stat = path.stat()
     return [str(path), stat.st_size, stat.st_mtime_ns]
+
+
+def _transcription_cache_key(source, options, long, media_kind,
+                             render_from_sections, source_input,
+                             provider=None):
+    """Include the resolved speech provider/model in transcript cache identity.
+
+    Without this, a transcript created by Faster-Whisper could be reused
+    after switching to Groq, so the Groq adapter would never run.
+    """
+    selected = provider or dt.resolve_transcription_provider()
+    if selected == "groq":
+        model = os.environ.get(
+            "VIRALCLIPS_GROQ_TRANSCRIPTION_MODEL",
+            "whisper-large-v3-turbo")
+    else:
+        model = options["whisper_model"]
+    return digest([
+        dt.TRANSCRIPT_VERSION, file_identity(source),
+        options["whisper_model"], options["device"], bool(long),
+        media_kind, bool(render_from_sections), source_input,
+        selected, model,
+    ])
 
 
 def validate_options(options):
@@ -282,10 +306,10 @@ def run_project(path, action="all", preview=False, pick=None, resume=True, progr
                 state["source_meta"] = meta
 
             stage("transcribe")
-            transcript_key = digest([
-                dt.TRANSCRIPT_VERSION, file_identity(source),
-                options["whisper_model"], options["device"], bool(long),
-                media_kind, bool(render_from_sections), source_input])
+            transcription_provider = dt.resolve_transcription_provider()
+            transcript_key = _transcription_cache_key(
+                source, options, long, media_kind, render_from_sections,
+                source_input, provider=transcription_provider)
             transcript_path = path / "transcript.json"
             if (not resume or state["cache"].get("transcript") != transcript_key
                     or not transcript_path.exists()):
@@ -318,7 +342,8 @@ def run_project(path, action="all", preview=False, pick=None, resume=True, progr
                         media_kind=media_kind,
                         render_from_sections=render_from_sections,
                         identity=source_identity,
-                        progress=transcribe_progress)
+                        progress=transcribe_progress,
+                        provider=transcription_provider)
                     if (is_url and long and media_kind == "audio"
                             and not read_json(transcript_path).get("words")):
                         visual = ingest.download_visual_discovery(
