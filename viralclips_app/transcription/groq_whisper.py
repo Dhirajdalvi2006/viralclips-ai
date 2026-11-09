@@ -337,7 +337,7 @@ class GroqTranscriptionProvider:
         api_key = _api_key()
 
         audio = Path(audio_path)
-        chunks = _chunk_audio(audio, target_mb=self.max_file_mb * 0.6,
+        chunks = _chunk_audio(audio, target_mb=getattr(self, "_chunk_target_mb", 15.0),
                              overlap=OVERLAP_SECONDS)
 
         results: list[tuple[TranscriptionResult, float]] = []
@@ -365,10 +365,14 @@ class GroqTranscriptionProvider:
 
 def transcribe_audio_file(audio_path: str, *,
                          model: str = "whisper-large-v3-turbo",
+                         max_file_mb: float = 25.0,
+                         chunk_target_mb: float = 15.0,
                          language: str | None = None,
                          word_timestamps: bool = True) -> TranscriptionResult:
     """Convenience entry point used by the worker and tests."""
-    provider = GroqTranscriptionProvider(model=model, language=language,
-                                         word_timestamps=word_timestamps)
+    provider = GroqTranscriptionProvider(
+        model=model, max_file_mb=max_file_mb, language=language,
+        word_timestamps=word_timestamps)
+    provider._chunk_target_mb = chunk_target_mb
     return provider.transcribe(audio_path, language=language,
                                word_timestamps=word_timestamps)

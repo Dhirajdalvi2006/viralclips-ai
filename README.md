@@ -9,7 +9,13 @@ to hold attention, renders them as 1080×1920 clips with burnt-in captions,
 and puts them in a review queue where you approve, reject, download or
 publish them.
 
-Nothing is uploaded anywhere. The database, the clips and the queue all live
+Nothing is uploaded unless you explicitly enable an external AI provider.
+Video processing is local-first: FFmpeg extracts audio and Chopify renders
+clips on this machine. When Groq transcription is enabled, the extracted
+audio is sent to Groq. When Groq reasoning is enabled, relevant
+transcript and candidate information is sent to the configured AI
+provider. Faster-Whisper can run fully locally. The database, the clips
+and the queue all live
 in a folder on your disk.
 
 > **Under the hood:** the video engine is [Chopify](https://github.com/mehbul/chopify)

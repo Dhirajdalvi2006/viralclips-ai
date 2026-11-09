@@ -104,7 +104,32 @@ if (not os.environ.get("VIRALCLIPS_LLM_FALLBACK")
         and DEFAULT_AI_FALLBACK):
     os.environ["VIRALCLIPS_LLM_FALLBACK"] = DEFAULT_AI_FALLBACK
 
-# --- monitoring -----------------------------------------------------------
+# --- transcription --------------------------------------------------------
+
+#: Transcription provider: "auto" (try local, fall back to Groq on a
+#: blocked DLL), "groq" (Groq Whisper only) or "local" (Faster-Whisper).
+DEFAULT_TRANSCRIPTION_PROVIDER = os.environ.get(
+    "VIRALCLIPS_TRANSCRIPTION_PROVIDER", "auto")
+
+#: Groq model used for transcription.
+DEFAULT_GROQ_TRANSCRIPTION_MODEL = os.environ.get(
+    "VIRALCLIPS_GROQ_TRANSCRIPTION_MODEL", "whisper-large-v3-turbo")
+
+#: Whether Groq transcription is allowed at all.
+GROQ_TRANSCRIPTION_ENABLED = os.environ.get(
+    "VIRALCLIPS_GROQ_TRANSCRIPTION_ENABLED", "1") != "0"
+
+#: Whether local Faster-Whisper transcription is allowed.
+LOCAL_TRANSCRIPTION_ENABLED = os.environ.get(
+    "VIRALCLIPS_LOCAL_TRANSCRIPTION_ENABLED", "1") != "0"
+
+#: Target chunk size in MB for Groq transcription uploads.
+GROQ_TRANSCRIPTION_CHUNK_TARGET_MB = float(os.environ.get(
+    "VIRALCLIPS_GROQ_TRANSCRIPTION_CHUNK_TARGET_MB", "15"))
+
+#: Conservative upload limit in MB (Groq free tier is 25 MB).
+GROQ_TRANSCRIPTION_MAX_FILE_MB = float(os.environ.get(
+    "VIRALCLIPS_GROQ_TRANSCRIPTION_MAX_FILE_MB", "25"))
 
 #: Default channel check interval, in minutes.
 DEFAULT_MONITOR_INTERVAL_MINUTES = int(
@@ -160,6 +185,10 @@ def describe() -> dict:
         "default_ai_provider": DEFAULT_AI_PROVIDER,
         "default_ai_model": DEFAULT_AI_MODEL,
         "default_ai_fallback": DEFAULT_AI_FALLBACK,
+        "default_transcription_provider": DEFAULT_TRANSCRIPTION_PROVIDER,
+        "default_groq_transcription_model": DEFAULT_GROQ_TRANSCRIPTION_MODEL,
+        "groq_transcription_enabled": GROQ_TRANSCRIPTION_ENABLED,
+        "local_transcription_enabled": LOCAL_TRANSCRIPTION_ENABLED,
         "monitor_interval_minutes": DEFAULT_MONITOR_INTERVAL_MINUTES,
         "publishing_enabled": PUBLISHING_ENABLED,
         "min_free_disk_bytes": MIN_FREE_DISK_BYTES,

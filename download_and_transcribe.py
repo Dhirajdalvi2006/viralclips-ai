@@ -438,7 +438,13 @@ def _transcribe_with_groq(video, workdir, duration=None, source=None,
         print(f"Extracted audio: {audio_path} "
               f"({audio_path.stat().st_size} bytes)", flush=True)
 
-        result = transcribe_audio_file(str(audio_path))
+        from viralclips_app import config as _config
+        model = _config.DEFAULT_GROQ_TRANSCRIPTION_MODEL
+        result = transcribe_audio_file(
+            str(audio_path),
+            model=model,
+            max_file_mb=_config.GROQ_TRANSCRIPTION_MAX_FILE_MB,
+            chunk_target_mb=_config.GROQ_TRANSCRIPTION_CHUNK_TARGET_MB)
         total = (float(duration) if duration is not None
                  else float(result.duration or 0.0))
         if total <= 0:
