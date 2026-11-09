@@ -2316,6 +2316,7 @@ registerRoute('studio',
         el('button', { class: 'btn sm ghost', onclick: () => splitAtPlayhead() }, 'Split'),
         el('button', { class: 'btn sm ghost', onclick: () => deleteSelected() }, 'Delete'),
         el('button', { class: 'btn sm ghost', onclick: () => duplicateSelected() }, 'Duplicate'),
+        el('button', { class: 'btn sm ghost', onclick: () => addToAudioTimeline() }, 'Add Audio'),
         el('button', { class: 'btn sm', onclick: () => saveProject() }, 'Save'),
         el('button', { class: 'btn sm primary', onclick: () => exportProject() }, 'Export')),
       el('div', { class: 'timeline-track', id: 'studio-timeline' },
@@ -2329,7 +2330,35 @@ registerRoute('studio',
         el('div', { class: 'prop-row' }, el('label', { text: 'Clip' }), el('span', { id: 'prop-clip-name', text: 'None selected' })),
         el('div', { class: 'prop-row' }, el('label', { text: 'Start' }), el('span', { id: 'prop-start', text: '0.00s' })),
         el('div', { class: 'prop-row' }, el('label', { text: 'End' }), el('span', { id: 'prop-end', text: '0.00s' })),
-        el('div', { class: 'prop-row' }, el('label', { text: 'Duration' }), el('span', { id: 'prop-dur', text: '0.00s' }))
+        el('div', { class: 'prop-row' }, el('label', { text: 'Duration' }), el('span', { id: 'prop-dur', text: '0.00s' })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Speed' }), el('input', { type: 'range', min: '0.25', max: '2', step: '0.25', value: '1', id: 'prop-speed',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.speed = parseFloat(e.target.value); } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Volume' }), el('input', { type: 'range', min: '0', max: '1', step: '0.1', value: '1', id: 'prop-volume',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.volume = parseFloat(e.target.value); } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Opacity' }), el('input', { type: 'range', min: '0', max: '1', step: '0.1', value: '1', id: 'prop-opacity',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.opacity = parseFloat(e.target.value); } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Position X' }), el('input', { type: 'number', value: '0', id: 'prop-posx',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.posX = parseFloat(e.target.value) || 0; } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Position Y' }), el('input', { type: 'number', value: '0', id: 'prop-posy',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.posY = parseFloat(e.target.value) || 0; } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Scale' }), el('input', { type: 'range', min: '0.1', max: '3', step: '0.1', value: '1', id: 'prop-scale',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.scale = parseFloat(e.target.value); } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Rotation' }), el('input', { type: 'range', min: '-180', max: '180', step: '1', value: '0', id: 'prop-rotation',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.rotation = parseFloat(e.target.value); } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Crop Top' }), el('input', { type: 'range', min: '0', max: '50', step: '1', value: '0', id: 'prop-cropt',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.cropTop = parseFloat(e.target.value); } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Crop Bottom' }), el('input', { type: 'range', min: '0', max: '50', step: '1', value: '0', id: 'prop-cropb',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.cropBottom = parseFloat(e.target.value); } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Crop Left' }), el('input', { type: 'range', min: '0', max: '50', step: '1', value: '0', id: 'prop-cropl',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.cropLeft = parseFloat(e.target.value); } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Crop Right' }), el('input', { type: 'range', min: '0', max: '50', step: '1', value: '0', id: 'prop-cropr',
+          oninput: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.cropRight = parseFloat(e.target.value); } })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Aspect Ratio' }), el('select', { id: 'prop-aspect',
+          onchange: (e) => { if (State.studioSelectedClip) State.studioSelectedClip.aspectRatio = e.target.value; } },
+          el('option', { value: '16:9', text: '16:9' }),
+          el('option', { value: '9:16', text: '9:16' }),
+          el('option', { value: '1:1', text: '1:1' }),
+          el('option', { value: '4:5', text: '4:5' })))
       )
     );
 
@@ -2339,7 +2368,30 @@ registerRoute('studio',
     // Initialize studio state
     if (!State.studioTimeline) State.studioTimeline = [];
     if (!State.studioSelectedClip) State.studioSelectedClip = null;
-
+    // Load saved project
+    try {
+      const saved = localStorage.getItem('studio_project');
+      if (saved) {
+        const proj = JSON.parse(saved);
+        if (proj.timeline && Array.isArray(proj.timeline)) {
+          State.studioTimeline = proj.timeline.map(c => ({
+            ...c,
+            speed: c.speed || 1,
+            volume: c.volume || 1,
+            opacity: c.opacity || 1,
+            posX: c.posX || 0,
+            posY: c.posY || 0,
+            scale: c.scale || 1,
+            rotation: c.rotation || 0,
+            cropTop: c.cropTop || 0,
+            cropBottom: c.cropBottom || 0,
+            cropLeft: c.cropLeft || 0,
+            cropRight: c.cropRight || 0,
+            aspectRatio: c.aspectRatio || '16:9',
+          }));
+        }
+      }
+    } catch (e) { /* ignore */ }
     // Render timeline
     renderStudioTimeline();
 
@@ -2370,6 +2422,67 @@ registerRoute('studio',
   });
 
 /* Studio helper functions */
+function addToAudioTimeline() {
+  if (!State.studioTimeline) State.studioTimeline = [];
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'audio/*,video/*';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    // Generate waveform
+    const waveform = await generateWaveform(url);
+    const lastEnd = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 0);
+    State.studioTimeline.push({
+      id: 'audio_' + Date.now(),
+      type: 'audio',
+      src: url,
+      title: file.name,
+      start: lastEnd,
+      end: lastEnd + 10,
+      trimStart: 0,
+      trimEnd: 10,
+      volume: 1,
+      muted: false,
+      fadeIn: 0,
+      fadeOut: 0,
+      waveform: waveform,
+      speed: 1,
+      opacity: 1,
+      posX: 0, posY: 0, scale: 1, rotation: 0,
+      cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0,
+      aspectRatio: '16:9',
+    });
+    renderStudioTimeline();
+  };
+  input.click();
+}
+
+async function generateWaveform(url) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const response = await fetch(url);
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+    const channelData = audioBuffer.getChannelData(0);
+    const samples = 200;
+    const blockSize = Math.floor(channelData.length / samples);
+    const waveform = [];
+    for (let i = 0; i < samples; i++) {
+      let sum = 0;
+      for (let j = 0; j < blockSize; j++) {
+        sum += Math.abs(channelData[i * blockSize + j] || 0);
+      }
+      waveform.push(sum / blockSize);
+    }
+    ctx.close();
+    return waveform;
+  } catch (e) {
+    console.warn('Waveform generation failed:', e);
+    return null;
+  }
+}
 function addToTimeline(clip) {
   if (!State.studioTimeline) State.studioTimeline = [];
   const lastEnd = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 0);
@@ -2385,6 +2498,15 @@ function addToTimeline(clip) {
     speed: 1,
     volume: 1,
     opacity: 1,
+    posX: 0,
+    posY: 0,
+    scale: 1,
+    rotation: 0,
+    cropTop: 0,
+    cropBottom: 0,
+    cropLeft: 0,
+    cropRight: 0,
+    aspectRatio: '16:9',
   });
   renderStudioTimeline();
 }
@@ -2461,6 +2583,31 @@ function updatePropsPanel(clip) {
   if (start) start.textContent = clip.start.toFixed(2) + 's';
   if (end) end.textContent = clip.end.toFixed(2) + 's';
   if (dur) dur.textContent = (clip.end - clip.start).toFixed(2) + 's';
+  // Load transform values into inputs
+  const speed = document.getElementById('prop-speed');
+  const volume = document.getElementById('prop-volume');
+  const opacity = document.getElementById('prop-opacity');
+  const posX = document.getElementById('prop-posx');
+  const posY = document.getElementById('prop-posy');
+  const scale = document.getElementById('prop-scale');
+  const rotation = document.getElementById('prop-rotation');
+  const cropT = document.getElementById('prop-cropt');
+  const cropB = document.getElementById('prop-cropb');
+  const cropL = document.getElementById('prop-cropl');
+  const cropR = document.getElementById('prop-cropr');
+  const aspect = document.getElementById('prop-aspect');
+  if (speed) speed.value = clip.speed || 1;
+  if (volume) volume.value = clip.volume || 1;
+  if (opacity) opacity.value = clip.opacity || 1;
+  if (posX) posX.value = clip.posX || 0;
+  if (posY) posY.value = clip.posY || 0;
+  if (scale) scale.value = clip.scale || 1;
+  if (rotation) rotation.value = clip.rotation || 0;
+  if (cropT) cropT.value = clip.cropTop || 0;
+  if (cropB) cropB.value = clip.cropBottom || 0;
+  if (cropL) cropL.value = clip.cropLeft || 0;
+  if (cropR) cropR.value = clip.cropRight || 0;
+  if (aspect) aspect.value = clip.aspectRatio || '16:9';
 }
 
 function splitAtPlayhead() {
@@ -2481,6 +2628,15 @@ function splitAtPlayhead() {
     speed: clip.speed,
     volume: clip.volume,
     opacity: clip.opacity,
+    posX: clip.posX,
+    posY: clip.posY,
+    scale: clip.scale,
+    rotation: clip.rotation,
+    cropTop: clip.cropTop,
+    cropBottom: clip.cropBottom,
+    cropLeft: clip.cropLeft,
+    cropRight: clip.cropRight,
+    aspectRatio: clip.aspectRatio,
   };
   clip.end = splitTime;
   clip.trimEnd = clip.trimStart + (splitTime - clip.start);
