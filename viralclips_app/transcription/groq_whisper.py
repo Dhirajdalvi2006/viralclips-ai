@@ -109,7 +109,11 @@ def _post_audio(audio_path: Path, model: str, api_key: str,
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 raw = response.read()
-                data = json.loads(raw)
+                try:
+                    data = json.loads(raw)
+                except (json.JSONDecodeError, ValueError) as exc:
+                    raise GroqTranscriptionError(
+                        f"invalid JSON response: {exc}") from exc
                 return data
         except urllib.error.HTTPError as exc:
             raw = exc.read()
