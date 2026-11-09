@@ -71,33 +71,58 @@ def _download(url, workdir):
 def transcribe(video, workdir, model_size, device, compute_type, duration=None,
                chunked=False, source=None, media_kind="video",
                render_from_sections=False, identity=None, progress=None,
-               resume=True, provider="auto"):
-    """Transcribe a short source in one pass or a long source in chunks.
+               resume=True, provider=None):
+    """Transcribe with an explicitly selected backend.
 
-    ``provider`` selects the transcription backend: ``"auto"`` (try
-    faster-whisper, fall back to Groq on a blocked DLL), ``"faster_whisper"``
-    or ``"groq"``.
+    Auto mode prefers Groq when a credential is configured, avoiding an
+    unnecessary CTranslate2 import on hosts where Windows policy blocks it.
+    If Groq is not configured, auto uses Faster-Whisper. Explicit provider
+    selections never silently change providers.
     """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
 
-    use_groq = (provider == "groq")
+    provider = (provider or os.environ.get(
+        "VIRALCLIPS_TRANSCRIPTION_PROVIDER", "auto")).strip().lower()
+    if provider in {"local", "faster-whisper", "faster_whisper"}:
+        provider = "faster_whisper"
+    if provider not in {"auto", "groq", "faster_whisper"}:
+        raise ValueError(
+            "Transcription provider must be auto, groq or faster_whisper.")
 
-    if provider == "auto" and not chunked:
-        try:
-            from faster_whisper import WhisperModel  # noqa: F401
-            use_groq = False
-        except Exception as exc:
-            print(f"faster-whisper unavailable ({type(exc).__name__}: {exc}); "
-                  f"using Groq transcription.", flush=True)
-            use_groq = True
+    groq_enabled = os.environ.get(
+        "VIRALCLIPS_GROQ_TRANSCRIPTION_ENABLED", "1") != "0"
+    local_enabled = os.environ.get(
+        "VIRALCLIPS_LOCAL_TRANSCRIPTION_ENABLED", "1") != "0"
+
+    if provider == "groq" and not groq_enabled:
+        raise RuntimeError("Groq transcription is disabled by configuration.")
+    if provider == "faster_whisper" and not local_enabled:
+        raise RuntimeError("Local Faster-Whisper transcription is disabled.")
+
+    use_groq = provider == "groq"
+    if provider == "auto":
+        # Resolve Groq credentials before importing Faster-Whisper/CTranslate2.
+        if groq_enabled:
+            try:
+                from viralclips_app.transcription.groq_whisper import _api_key
+                _api_key()
+                use_groq = True
+            except Exception as exc:
+                print(
+                    "Groq transcription is not configured "
+                    f"({type(exc).__name__}); checking local provider.",
+                    flush=True)
+        if not use_groq and not local_enabled:
+            raise RuntimeError(
+                "No transcription provider is available: Groq is not "
+                "configured and local transcription is disabled.")
 
     if use_groq:
         return _transcribe_with_groq(
             video, workdir, duration=duration, source=source,
             media_kind=media_kind, render_from_sections=render_from_sections,
             identity=identity, progress=progress)
-
     if chunked:
         try:
             return transcribe_chunked(
