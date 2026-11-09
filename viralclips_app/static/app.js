@@ -2322,6 +2322,7 @@ registerRoute('studio',
         el('button', { class: 'btn sm ghost', onclick: () => addTextOverlay('lower-third') }, 'Add Lower Third'),
         el('button', { class: 'btn sm ghost', onclick: () => importSRT() }, 'Import SRT'),
         el('button', { class: 'btn sm ghost', onclick: () => exportSRT() }, 'Export SRT'),
+        el('button', { class: 'btn sm', onclick: () => analyzeWithAI() }, 'Analyze AI'),
         el('button', { class: 'btn sm', onclick: () => saveProject() }, 'Save'),
         el('button', { class: 'btn sm primary', onclick: () => exportProject() }, 'Export')),
       el('div', { class: 'timeline-track', id: 'studio-timeline' },
@@ -2669,6 +2670,77 @@ function parseSRT(text) {
   }
   return captions;
 }
+async function analyzeWithAI() {
+  if (!State.studioProjectId) {
+    try {
+      const result = await api('/api/projects', { method: 'POST', body: JSON.stringify({
+        name: 'Studio Project',
+        timeline_data: { timeline: State.studioTimeline || [] },
+        duration: (State.studioTimeline || []).reduce((max, c) => Math.max(max, c.end), 0),
+      }) });
+      if (result && result.id) State.studioProjectId = result.id;
+    } catch (e) { alert('Failed to create project: ' + e.message); return; }
+  }
+  // Update project with current timeline
+  await api(`/api/projects/${State.studioProjectId}`, { method: 'PUT', body: JSON.stringify({
+    timeline_data: { timeline: State.studioTimeline || [] },
+    duration: (State.studioTimeline || []).reduce((max, c) => Math.max(max, c.end), 0),
+  }) });
+  // Need a transcript - check if any clip has one
+  const transcript = [];
+  for (const c of (State.studioTimeline || [])) {
+    if (c.transcript) { transcript.push(...c.transcript); }
+  }
+  try {
+    const result = await api(`/api/projects/${State.studioProjectId}/ai/analyze`, {
+      method: 'POST',
+      body: JSON.stringify({ transcript, count: 5, min_seconds: 5, max_seconds: 30 }),
+    });
+    if (result.markers) {
+      // Store markers in project
+      const proj = await api(`/api/projects/${State.studioProjectId}`);
+      if (proj && proj.timeline_data) {
+        State.studioTimeline = (proj.timeline_data.timeline || []).map(c => ({...c}));
+      }
+      alert(`AI found ${result.markers.length} interesting moments!`);
+      // Show markers
+      renderAIMarkers(result.markers);
+    } else if (result.error) {
+      alert('Analysis: ' + result.error);
+    }
+  } catch (e) { alert('Analysis failed: ' + e.message); }
+}
+
+function renderAIMarkers(markers) {
+  // Store markers in State for display
+  if (!State.studioMarkers) State.studioMarkers = [];
+  State.studioMarkers = markers || [];
+  // Render marker elements on timeline
+  const container = document.getElementById('studio-clips');
+  if (!container) return;
+  // Remove existing markers
+  container.querySelectorAll('.ai-marker').forEach(m => m.remove());
+  const totalDur = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 10);
+  const pxPerSec = Math.max(10, 600 / totalDur);
+  for (const m of markers) {
+    const marker = document.createElement('div');
+    marker.className = 'ai-marker';
+    marker.style.left = (m.start * pxPerSec) + 'px';
+    marker.style.width = Math.max(4, (m.end - m.start) * pxPerSec) + 'px';
+    marker.style.background = m.category === 'funny' ? '#ff9800' : m.category === 'hook' ? '#e91e63' : '#2196f3';
+    marker.title = `${m.title} (score: ${m.score})`;
+    marker.addEventListener('click', () => {
+      const v = document.getElementById('studio-video');
+      if (v) v.currentTime = m.start;
+      State.studioSelectedMarker = m;
+      alert(`${m.title}
+${m.explanation}
+Score: ${m.score}`);
+    });
+    container.append(marker);
+  }
+}
+
 function addToTimeline(clip) {
   if (!State.studioTimeline) State.studioTimeline = [];
   const lastEnd = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 0);
@@ -2950,8 +3022,60 @@ function redo() {
   renderStudioTimeline();
 }
 
-function exportProject() {
-  alert('Export: Use the existing clip export from the Clip Editor. Full timeline export coming in Milestone 6.');
+async function exportProject() {
+  if (!State.studioProjectId) {
+    // Create project first
+    try {
+      const result = await api('/api/projects', { method: 'POST', body: JSON.stringify({
+        name: 'Studio Project',
+        timeline_data: { timeline: State.studioTimeline || [] },
+        duration: (State.studioTimeline || []).reduce((max, c) => Math.max(max, c.end), 0),
+      }) });
+      if (result && result.id) State.studioProjectId = result.id;
+    } catch (e) { alert('Failed to create project: ' + e.message); return; }
+  } else {
+    // Update project
+    await api(`/api/projects/${State.studioProjectId}`, { method: 'PUT', body: JSON.stringify({
+      timeline_data: { timeline: State.studioTimeline || [] },
+      duration: (State.studioTimeline || []).reduce((max, c) => Math.max(max, c.end), 0),
+    }) });
+  }
+  // Start export
+  try {
+    const job = await api(`/api/projects/${State.studioProjectId}/export`, { method: 'POST', body: JSON.stringify({
+      width: 1080, height: 1920, fps: 30, quality: 'high',
+      filename: 'studio_export.mp4',
+    }) });
+    if (job && job.job_id) {
+      pollExportJob(job.job_id);
+    }
+  } catch (e) { alert('Export failed: ' + e.message); }
+}
+
+async function pollExportJob(jobId) {
+  const interval = setInterval(async () => {
+    try {
+      const job = await api(`/api/export/jobs/${jobId}`);
+      const statusEl = document.getElementById('studio-export-status');
+      if (statusEl) {
+        statusEl.textContent = `${job.stage} - ${job.progress.toFixed(0)}%`;
+      }
+      if (job.status === 'completed') {
+        clearInterval(interval);
+        if (statusEl) statusEl.textContent = `Completed: ${job.output_path}`;
+        alert('Export completed! File: ' + job.output_path);
+      } else if (job.status === 'failed') {
+        clearInterval(interval);
+        if (statusEl) statusEl.textContent = `Failed: ${job.error}`;
+        alert('Export failed: ' + job.error);
+      } else if (job.status === 'cancelled') {
+        clearInterval(interval);
+        if (statusEl) statusEl.textContent = 'Cancelled';
+      }
+    } catch (e) {
+      clearInterval(interval);
+    }
+  }, 1000);
 }
 
 function studioKeyHandler(e) {

@@ -2018,6 +2018,163 @@ def download_export(job_id: str):
     return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
+# --- AI analysis -----------------------------------------------------------
+
+@app.post("/api/projects/{project_id}/ai/analyze")
+def analyze_project(project_id: int, payload: dict = None):
+    payload = payload or {}
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        project_data = {
+            "id": project.id,
+            "name": project.name,
+            "timeline_data": project.timeline_data or {},
+        }
+
+    # Get transcript from payload or project
+    transcript = payload.get("transcript", [])
+    if not transcript:
+        # Try to get from timeline clips
+        for clip in (project_data.get("timeline_data", {}).get("timeline", [])):
+            if clip.get("transcript"):
+                transcript = clip["transcript"]
+                break
+
+    # Convert to Utterances
+    from .intelligence import Utterance, detect_moments
+    utterances = []
+    for t in transcript:
+        utterances.append(Utterance(
+            start=t.get("start", 0),
+            end=t.get("end", 0),
+            text=t.get("text", ""),
+            words=t.get("words", []),
+        ))
+
+    if not utterances:
+        return {"error": "No transcript available. Provide transcript data.", "markers": []}
+
+    # Run detection
+    count = payload.get("count", 5)
+    min_seconds = payload.get("min_seconds", 10)
+    max_seconds = payload.get("max_seconds", 60)
+    result = detect_moments(utterances, count=count, min_seconds=min_seconds, max_seconds=max_seconds)
+
+    # Convert moments to markers
+    markers = []
+    for i, m in enumerate(result.moments):
+        markers.append({
+            "id": f"marker_{i}",
+            "start": m.start,
+            "end": m.end,
+            "title": m.title or f"Moment {i+1}",
+            "category": m.category or "interesting",
+            "score": round(m.score, 1),
+            "explanation": m.explanation or "",
+            "text": m.text or "",
+            "confidence": "high" if m.score > 70 else "medium" if m.score > 40 else "low",
+            "accepted": None,
+        })
+
+    # Save markers to project
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project:
+            td = dict(project.timeline_data or {})
+            td["ai_markers"] = markers
+            project.timeline_data = td
+            session.commit()
+
+    return {
+        "markers": markers,
+        "count": len(markers),
+        "error": result.error,
+    }
+
+
+@app.get("/api/projects/{project_id}/ai/markers")
+def get_ai_markers(project_id: int):
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        td = project.timeline_data or {}
+        return {"markers": td.get("ai_markers", [])}
+
+
+@app.post("/api/projects/{project_id}/ai/markers/{marker_id}/accept")
+def accept_marker(project_id: int, marker_id: str):
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        td = dict(project.timeline_data or {})
+        markers = td.get("ai_markers", [])
+        for m in markers:
+            if m.get("id") == marker_id:
+                m["accepted"] = True
+        td["ai_markers"] = markers
+        project.timeline_data = td
+        session.commit()
+        return {"accepted": True, "marker_id": marker_id}
+
+
+@app.post("/api/projects/{project_id}/ai/markers/{marker_id}/reject")
+def reject_marker(project_id: int, marker_id: str):
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        td = dict(project.timeline_data or {})
+        markers = td.get("ai_markers", [])
+        for m in markers:
+            if m.get("id") == marker_id:
+                m["accepted"] = False
+        td["ai_markers"] = markers
+        project.timeline_data = td
+        session.commit()
+        return {"rejected": True, "marker_id": marker_id}
+
+
+@app.post("/api/projects/{project_id}/ai/markers/{marker_id}/create-clip")
+def create_clip_from_marker(project_id: int, marker_id: str):
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        td = dict(project.timeline_data or {})
+        markers = td.get("ai_markers", [])
+        marker = None
+        for m in markers:
+            if m.get("id") == marker_id:
+                marker = m
+                break
+        if marker is None:
+            raise HTTPException(status_code=404, detail="Marker not found.")
+        # Create a clip from the marker
+        timeline = td.get("timeline", [])
+        new_clip = {
+            "id": "ai_clip_" + str(len(timeline)),
+            "type": "video",
+            "title": marker.get("title", "AI Clip"),
+            "start": marker["start"],
+            "end": marker["end"],
+            "trimStart": 0,
+            "trimEnd": marker["end"] - marker["start"],
+            "speed": 1, "volume": 1, "opacity": 1,
+            "posX": 0, "posY": 0, "scale": 1, "rotation": 0,
+            "cropTop": 0, "cropBottom": 0, "cropLeft": 0, "cropRight": 0,
+            "aspectRatio": "16:9",
+        }
+        timeline.append(new_clip)
+        td["timeline"] = timeline
+        project.timeline_data = td
+        session.commit()
+        return {"created": True, "clip": new_clip}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     index_file = STATIC_DIR / "index.html"
