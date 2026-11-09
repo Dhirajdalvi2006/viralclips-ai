@@ -47,10 +47,10 @@ def test_every_navigation_screen_exists_in_the_html(html):
     """Every screen the sidebar offers must have a route entry."""
     routes = set(re.findall(r'data-route="([^"]+)"', html))
     for screen in ("overview", "new-task", "channels", "library", "queue",
-                   "clips", "editor", "calendar", "analytics", "ai",
+                   "clips", "editor", "studio", "calendar", "analytics", "ai",
                    "accounts", "settings"):
         assert screen in routes, f"missing screen {screen}"
-    assert len(routes) == 12
+    assert len(routes) == 13
 
 
 def test_the_token_is_sent_in_the_header(source):

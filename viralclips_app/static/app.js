@@ -2239,6 +2239,77 @@ function publishDialog(clip) {
   });
 }
 
+/* ══ EDITING STUDIO ═══════════════════════════════════════════════════════ */
+
+registerRoute('studio',
+  async () => {
+    const list = await api('/api/clips?limit=300');
+    const clips = list.clips || [];
+    return { clips };
+  },
+  ({ clips }) => {
+    const frag = document.createDocumentFragment();
+    frag.append(el('div', { class: 'page-head' },
+      el('div', {},
+        el('h1', { text: 'Editing Studio' }),
+        el('div', { class: 'sub', text: 'Full video editing workspace with timeline, preview, and export.' }))));
+    
+    // Studio layout
+    const studio = el('div', { class: 'studio-layout' });
+    
+    // Media panel (left)
+    const mediaPanel = el('div', { class: 'studio-panel studio-media' },
+      el('div', { class: 'panel-head', text: 'Media Library' }),
+      el('div', { class: 'panel-body', id: 'studio-media-list' }));
+    const mediaList = mediaPanel.querySelector('#studio-media-list');
+    for (const c of clips.slice(0, 20)) {
+      mediaList.append(el('div', { class: 'studio-media-item', 'data-clip-id': c.id },
+        el('div', { class: 't', text: c.title || `Clip ${c.index + 1}` }),
+        el('div', { class: 's', text: fmtDuration(c.duration_seconds) })));
+    }
+    
+    // Preview (center)
+    const previewPanel = el('div', { class: 'studio-panel studio-preview' },
+      el('div', { class: 'player-shell', id: 'studio-player' },
+        el('video', { id: 'studio-video', controls: true, style: 'width:100%;max-height:400px;background:#000' })),
+      el('div', { class: 'studio-controls' },
+        el('button', { class: 'btn sm', onclick: () => {
+          const v = document.getElementById('studio-video');
+          if (v) { v.paused ? v.play() : v.pause(); }
+        }}, 'Play/Pause'),
+        el('span', { id: 'studio-time', text: '0:00 / 0:00', style: 'margin-left:12px;font-family:monospace' })));
+    
+    // Timeline (bottom)
+    const timelinePanel = el('div', { class: 'studio-panel studio-timeline' },
+      el('div', { class: 'panel-head', text: 'Timeline' }),
+      el('div', { class: 'timeline-track', id: 'studio-timeline' },
+        el('div', { class: 'timeline-ruler', id: 'studio-ruler' }),
+        el('div', { class: 'timeline-clips', id: 'studio-clips' })));
+    
+    // Properties panel (right)
+    const propsPanel = el('div', { class: 'studio-panel studio-props' },
+      el('div', { class: 'panel-head', text: 'Properties' }),
+      el('div', { class: 'panel-body' },
+        el('div', { class: 'prop-row' }, el('label', { text: 'Speed' }), el('input', { type: 'range', min: '0.25', max: '2', step: '0.25', value: '1', id: 'studio-speed' })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Volume' }), el('input', { type: 'range', min: '0', max: '1', step: '0.1', value: '1', id: 'studio-volume' }))));
+    
+    studio.append(mediaPanel, previewPanel, propsPanel, timelinePanel);
+    frag.append(studio);
+    
+    // Time update
+    setTimeout(() => {
+      const v = document.getElementById('studio-video');
+      const t = document.getElementById('studio-time');
+      if (v && t) {
+        v.addEventListener('timeupdate', () => {
+          t.textContent = `${fmtDuration(v.currentTime)} / ${fmtDuration(v.duration || 0)}`;
+        });
+      }
+    }, 100);
+    
+    return frag;
+  });
+
 /* ══ PUBLISHING CALENDAR ═════════════════════════════════════════════════ */
 
 registerRoute('calendar',
