@@ -71,19 +71,63 @@ def _download(url, workdir):
 def transcribe(video, workdir, model_size, device, compute_type, duration=None,
                chunked=False, source=None, media_kind="video",
                render_from_sections=False, identity=None, progress=None,
-               resume=True):
-    """Transcribe a short source in one pass or a long source in chunks."""
+               resume=True, provider="auto"):
+    """Transcribe a short source in one pass or a long source in chunks.
+
+    ``provider`` selects the transcription backend: ``"auto"`` (try
+    faster-whisper, fall back to Groq on a blocked DLL), ``"faster_whisper"``
+    or ``"groq"``.
+    """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
-    if chunked:
-        return transcribe_chunked(
-            video, workdir, model_size, device, compute_type, duration,
-            source=source, media_kind=media_kind,
-            render_from_sections=render_from_sections, identity=identity,
-            progress=progress, resume=resume)
 
-    model = _load_model(model_size, device, compute_type)
-    seg_list, words, language, info_duration = _transcribe_media(model, video)
+    use_groq = (provider == "groq")
+
+    if provider == "auto" and not chunked:
+        try:
+            from faster_whisper import WhisperModel  # noqa: F401
+            use_groq = False
+        except Exception as exc:
+            print(f"faster-whisper unavailable ({type(exc).__name__}: {exc}); "
+                  f"using Groq transcription.", flush=True)
+            use_groq = True
+
+    if use_groq:
+        return _transcribe_with_groq(
+            video, workdir, duration=duration, source=source,
+            media_kind=media_kind, render_from_sections=render_from_sections,
+            identity=identity, progress=progress)
+
+    if chunked:
+        try:
+            return transcribe_chunked(
+                video, workdir, model_size, device, compute_type, duration,
+                source=source, media_kind=media_kind,
+                render_from_sections=render_from_sections, identity=identity,
+                progress=progress, resume=resume)
+        except Exception as exc:
+            if "DLL load failed" in str(exc) or "Application Control" in str(exc):
+                print(f"faster-whisper blocked by system policy ({exc}); "
+                      f"falling back to Groq transcription.", flush=True)
+                return _transcribe_with_groq(
+                    video, workdir, duration=duration, source=source,
+                    media_kind=media_kind, render_from_sections=render_from_sections,
+                    identity=identity, progress=progress)
+            raise
+
+    try:
+        model = _load_model(model_size, device, compute_type)
+        seg_list, words, language, info_duration = _transcribe_media(model, video)
+    except Exception as exc:
+        if "DLL load failed" in str(exc) or "Application Control" in str(exc):
+            print(f"faster-whisper blocked by system policy ({exc}); "
+                  f"falling back to Groq transcription.", flush=True)
+            return _transcribe_with_groq(
+                video, workdir, duration=duration, source=source,
+                media_kind=media_kind, render_from_sections=render_from_sections,
+                identity=identity, progress=progress)
+        raise
+
     total = float(duration) if duration is not None else float(info_duration)
     transcript = {
         "video": str(video),
@@ -100,10 +144,13 @@ def transcribe(video, workdir, model_size, device, compute_type, duration=None,
         "source": str(source or video),
         "source_duration": total,
         "source_identity": str(identity or ""),
+        "transcription_provider": "faster_whisper",
+        "transcription_model": model_size,
     }
     out = workdir / "transcript.json"
     _atomic_json(out, transcript)
-    print(f"Wrote {out}  ({len(words)} words, {len(seg_list)} segments)", flush=True)
+    print(f"Wrote {out}  ({len(words)} words, {len(seg_list)} segments)",
+          flush=True)
     return out
 
 
@@ -363,6 +410,70 @@ def main():
     print("Downloaded:", video, flush=True)
     transcribe(video, workdir, args.model, args.device, args.compute_type)
     print("STAGE 1 COMPLETE", flush=True)
+
+
+
+def _transcribe_with_groq(video, workdir, duration=None, source=None,
+                          media_kind="video", render_from_sections=False,
+                          identity=None, progress=None):
+    """Transcribe using Groq Speech-to-Text and write transcript.json."""
+    from viralclips_app.transcription.groq_whisper import (
+        transcribe_audio_file)
+    from viralclips_app.transcription.audio import extract_audio, cleanup
+    from pathlib import Path
+
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    if progress:
+        try:
+            progress("transcribe")
+        except Exception:
+            pass
+
+    audio_dir = workdir / "_groq_audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        audio_path = extract_audio(video, output_dir=audio_dir)
+        print(f"Extracted audio: {audio_path} "
+              f"({audio_path.stat().st_size} bytes)", flush=True)
+
+        result = transcribe_audio_file(str(audio_path))
+        total = (float(duration) if duration is not None
+                 else float(result.duration or 0.0))
+        if total <= 0:
+            total = result.duration
+
+        seg_list = [{"start": s.start, "end": s.end, "text": s.text}
+                    for s in result.segments]
+        words = [{"word": w.word, "start": w.start, "end": w.end}
+                 for w in result.words]
+
+        transcript = {
+            "video": str(video),
+            "language": result.language or "",
+            "duration": total,
+            "model": result.model or "whisper-large-v3-turbo",
+            "segments": seg_list,
+            "words": words,
+            "transcript_version": TRANSCRIPT_VERSION,
+            "chunked": False,
+            "chunks": 0,
+            "media_kind": media_kind,
+            "render_from_sections": bool(render_from_sections),
+            "source": str(source or video),
+            "source_duration": total,
+            "source_identity": str(identity or ""),
+            "transcription_provider": "groq",
+            "transcription_model": result.model or "whisper-large-v3-turbo",
+        }
+        out = workdir / "transcript.json"
+        _atomic_json(out, transcript)
+        print(f"Wrote {out}  ({len(words)} words, {len(seg_list)} segments) "
+              f"via Groq {result.model}", flush=True)
+        return out
+    finally:
+        cleanup(audio_dir)
 
 
 if __name__ == "__main__":
