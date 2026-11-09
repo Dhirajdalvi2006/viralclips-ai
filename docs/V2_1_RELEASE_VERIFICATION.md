@@ -100,3 +100,54 @@ Date: 2026-11-09
 - Commit: `b87fd8d`
 - Pushed: yes
 - main: untouched at `3803425`
+## Smart App Control blocker — final assessment
+
+### Root cause
+Windows Smart App Control (SAC) is a system-level code-integrity policy
+that blocks unsigned native DLLs. The `ctranslate2._ext` module (a `.pyd`
+file, which is a DLL) is unsigned and therefore blocked by SAC. This is
+not a code bug — it is a host security policy.
+
+### What was tried
+- Groq transcription was implemented as a fallback provider.
+- The `transcribe()` function in `download_and_transcribe.py` detects the
+  DLL failure and automatically switches to Groq.
+- The Groq-only execution path does NOT import `ctranslate2` (verified:
+  `ctranslate2` is not in `sys.modules` after importing the Groq provider).
+- The live E2E test confirmed Groq transcription works end-to-end:
+  171 words, 12 segments, Hindi language, 2 clips rendered, browser
+  playback verified.
+
+### Why this cannot be "fixed" in code
+- SAC evaluates file signatures against Microsoft's trust list.
+- `ctranslate2._ext.cp311-win_amd64.pyd` is unsigned.
+- There is no code-level workaround that does not involve disabling SAC
+  or modifying system security policies, which is explicitly prohibited.
+
+### Resolution
+The application already handles this correctly:
+1. In `auto` mode, faster-whisper is probed; if the DLL is blocked, the
+   pipeline falls back to Groq transcription automatically.
+2. The fallback is logged (not silent): "faster-whisper unavailable
+   (ImportError: DLL load failed...); using Groq transcription."
+3. Provider attribution is accurate: `transcription_provider: "groq"`,
+   `transcription_model: "whisper-large-v3-turbo"`.
+4. The V2 intelligence, rendering, and approval pipeline works with
+   Groq transcripts (verified live).
+
+### What the user can do
+- **Option A (recommended):** Keep using Groq transcription. It works.
+  The application is fully operational.
+- **Option B:** Turn off Smart App Control in Windows Settings
+  (Settings → Privacy & Security → Windows Security → App & Browser
+  Control → Smart App Control → Off). This is a system-level change that
+  the user must make themselves. It would allow faster-whisper to load.
+- **Option C:** Use a signed Whisper implementation. None is currently
+  available in the Python ecosystem that does not require native DLLs.
+
+### Conclusion
+The "blocker" is not a code defect. The application is fully
+operational with Groq transcription. The live E2E test passed with real
+Groq API responses and real rendered clips. No code change is needed to
+resolve this — it is a host security policy that the application already
+handles gracefully.
