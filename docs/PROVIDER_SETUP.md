@@ -316,3 +316,60 @@ $env:VIRALCLIPS_LLM_PROVIDER = "groq"
 $env:GROQ_API_KEY = "invalid"
 .venv\Scripts\python.exe viralclips.py recording.mp4 --action prepare --llm openai/gpt-oss-120b
 ```
+
+
+## Speech-to-text provider selection
+
+Speech transcription is separate from the chat/reasoning provider described
+above. The application supports Groq Whisper and local Faster-Whisper.
+
+Set `VIRALCLIPS_TRANSCRIPTION_PROVIDER` before launching both the API and
+worker:
+
+| Value | Behaviour |
+|---|---|
+| `auto` (default) | Prefer Groq when a Groq credential is available. Otherwise use local Faster-Whisper. |
+| `groq` | Groq only. Missing credentials or API errors are reported; it does not silently switch to local transcription. |
+| `faster_whisper` | Local Faster-Whisper only. A local dependency failure is reported; it does not silently switch to Groq. |
+
+Example for a Groq-first setup:
+
+```powershell
+$env:VIRALCLIPS_TRANSCRIPTION_PROVIDER = "auto"
+$env:VIRALCLIPS_GROQ_TRANSCRIPTION_ENABLED = "1"
+$env:VIRALCLIPS_LOCAL_TRANSCRIPTION_ENABLED = "1"
+.estart.bat
+```
+
+For a Groq-only setup:
+
+```powershell
+$env:VIRALCLIPS_TRANSCRIPTION_PROVIDER = "groq"
+.estart.bat
+```
+
+Available controls:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VIRALCLIPS_TRANSCRIPTION_PROVIDER` | `auto` | `auto`, `groq`, or `faster_whisper`. |
+| `VIRALCLIPS_GROQ_TRANSCRIPTION_ENABLED` | `1` | Set to `0` to disable Groq speech-to-text. |
+| `VIRALCLIPS_LOCAL_TRANSCRIPTION_ENABLED` | `1` | Set to `0` to disable local Faster-Whisper. |
+| `VIRALCLIPS_GROQ_TRANSCRIPTION_MODEL` | `whisper-large-v3-turbo` | Groq speech-to-text model. |
+| `VIRALCLIPS_GROQ_TRANSCRIPTION_MAX_FILE_MB` | `25` | Conservative maximum file size per transcription request. |
+| `VIRALCLIPS_GROQ_TRANSCRIPTION_CHUNK_TARGET_MB` | `15` | Target size for split audio chunks. |
+
+Groq transcription sends the extracted audio to Groq. Groq chat reasoning
+sends transcript/candidate text to the configured chat provider. These
+are separate external data flows. Local Faster-Whisper does not send audio
+to Groq. Do not describe a Groq-enabled run as fully offline.
+
+In Groq mode, the transcription dispatcher checks credentials and routes
+directly to the cloud adapter before importing Faster-Whisper or CTranslate2.
+This avoids loading the native CTranslate2 extension on Windows hosts where
+Smart App Control or Code Integrity blocks it. The application does not
+disable or bypass Windows security controls.
+
+Chunked Faster-Whisper transcripts record `transcription_provider` and
+`transcription_model`, just like Groq transcripts, so the UI and reports
+can distinguish which backend actually ran.
