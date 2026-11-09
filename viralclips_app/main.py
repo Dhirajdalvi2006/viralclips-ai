@@ -25,7 +25,7 @@ from . import (ai, config, intelligence, jobs, media, monitor, pipeline,
                publishing, security, storage)
 from .db import get_db, init_db, session_scope
 from .models import (Account, ApprovalEvent, Channel, Clip, Episode,
-                     Job, Publication, Setting, Task, Video)
+                     Job, Project, Publication, Setting, Task, Video)
 from .schemas import (BatchApproval, ChannelCreate, ChannelUpdate,
                       ClipUpdate, EpisodeUpdate, PublishRequest,
                       SettingsUpdate, TaskCreate, TaskUpdate)
@@ -1828,6 +1828,113 @@ async def events(request: Request):
 
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# --- projects ---------------------------------------------------------------
+
+@app.get("/api/projects")
+def list_projects():
+    with session_scope() as session:
+        projects = session.query(Project).order_by(Project.updated_at.desc()).all()
+        return {"projects": [_project_dict(p) for p in projects]}
+
+
+@app.post("/api/projects")
+def create_project(payload: dict = None):
+    payload = payload or {}
+    with session_scope() as session:
+        project = Project(
+            name=payload.get("name", "Untitled Project"),
+            description=payload.get("description", ""),
+            duration=payload.get("duration", 0.0),
+            resolution=payload.get("resolution", "1080x1920"),
+            frame_rate=payload.get("frame_rate", 30),
+            aspect_ratio=payload.get("aspect_ratio", "9:16"),
+            timeline_data=payload.get("timeline_data", {}),
+            export_config=payload.get("export_config", {}),
+            status=payload.get("status", "draft"),
+        )
+        session.add(project)
+        session.commit()
+        session.refresh(project)
+        return _project_dict(project)
+
+
+@app.get("/api/projects/{project_id}")
+def get_project(project_id: int):
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        return _project_dict(project)
+
+
+@app.put("/api/projects/{project_id}")
+def update_project(project_id: int, payload: dict):
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        for key in ("name", "description", "duration", "resolution", "frame_rate",
+                    "aspect_ratio", "timeline_data", "export_config", "status"):
+            if key in payload:
+                setattr(project, key, payload[key])
+        project.version = (project.version or 1) + 1
+        session.commit()
+        session.refresh(project)
+        return _project_dict(project)
+
+
+@app.delete("/api/projects/{project_id}")
+def delete_project(project_id: int):
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        session.delete(project)
+        session.commit()
+        return {"deleted": True, "id": project_id}
+
+
+@app.post("/api/projects/{project_id}/duplicate")
+def duplicate_project(project_id: int):
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        new_project = Project(
+            name=project.name + " (copy)",
+            description=project.description,
+            duration=project.duration,
+            resolution=project.resolution,
+            frame_rate=project.frame_rate,
+            aspect_ratio=project.aspect_ratio,
+            timeline_data=dict(project.timeline_data or {}),
+            export_config=dict(project.export_config or {}),
+            status="draft",
+        )
+        session.add(new_project)
+        session.commit()
+        session.refresh(new_project)
+        return _project_dict(new_project)
+
+
+def _project_dict(p):
+    return {
+        "id": p.id,
+        "name": p.name,
+        "description": p.description,
+        "duration": p.duration,
+        "resolution": p.resolution,
+        "frame_rate": p.frame_rate,
+        "aspect_ratio": p.aspect_ratio,
+        "timeline_data": p.timeline_data or {},
+        "export_config": p.export_config or {},
+        "status": p.status,
+        "version": p.version,
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)

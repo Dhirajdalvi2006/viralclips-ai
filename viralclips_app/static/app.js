@@ -2873,6 +2873,7 @@ function startTrim(e, clip, side) {
   const onUp = () => {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    pushHistory();
   };
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
@@ -2885,7 +2886,68 @@ function saveProject() {
     savedAt: new Date().toISOString(),
   };
   localStorage.setItem('studio_project', JSON.stringify(project));
-  alert('Project saved locally.');
+  // Also save to backend
+  autosaveToBackend(project);
+  alert('Project saved.');
+}
+
+let autosaveTimer = null;
+function scheduleAutosave() {
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => autosaveToBackend(), 2000);
+}
+
+async function autosaveToBackend(project) {
+  try {
+    const payload = {
+      name: (project && project.name) || 'Untitled Project',
+      timeline_data: { timeline: State.studioTimeline || [] },
+      duration: (State.studioTimeline || []).reduce((max, c) => Math.max(max, c.end), 0),
+      status: 'draft',
+    };
+    if (State.studioProjectId) {
+      await api(`/api/projects/${State.studioProjectId}`, { method: 'PUT', body: JSON.stringify(payload) });
+    } else {
+      const result = await api('/api/projects', { method: 'POST', body: JSON.stringify(payload) });
+      if (result && result.id) State.studioProjectId = result.id;
+    }
+    // Update save status
+    const statusEl = document.getElementById('studio-save-status');
+    if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = 'var(--success, #4caf50)'; }
+  } catch (e) {
+    const statusEl = document.getElementById('studio-save-status');
+    if (statusEl) { statusEl.textContent = 'Save failed'; statusEl.style.color = 'var(--danger, #f44336)'; }
+  }
+}
+
+// Undo/Redo system
+if (!State.studioHistory) State.studioHistory = [];
+if (!State.studioHistoryIndex) State.studioHistoryIndex = -1;
+
+function pushHistory() {
+  if (!State.studioHistory) State.studioHistory = [];
+  if (!State.studioHistoryIndex) State.studioHistoryIndex = -1;
+  // Remove any redo states
+  State.studioHistory = State.studioHistory.slice(0, State.studioHistoryIndex + 1);
+  State.studioHistory.push(JSON.stringify(State.studioTimeline || []));
+  if (State.studioHistory.length > 50) State.studioHistory.shift();
+  else State.studioHistoryIndex++;
+  if (State.studioHistoryIndex >= State.studioHistory.length) State.studioHistoryIndex = State.studioHistory.length - 1;
+  scheduleAutosave();
+}
+
+function undo() {
+  if (!State.studioHistory || State.studioHistoryIndex <= 0) return;
+  State.studioHistoryIndex--;
+  State.studioTimeline = JSON.parse(State.studioHistory[State.studioHistoryIndex]);
+  renderStudioTimeline();
+}
+
+function redo() {
+  if (!State.studioHistory || State.studioHistoryIndex >= State.studioHistory.length - 1) return;
+  State.studioHistoryIndex++;
+  State.studioTimeline = JSON.parse(State.studioHistory[State.studioHistoryIndex]);
+  renderStudioTimeline();
 }
 
 function exportProject() {
@@ -2895,6 +2957,8 @@ function exportProject() {
 function studioKeyHandler(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
   const v = document.getElementById('studio-video');
+  if (e.ctrlKey && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+  if (e.ctrlKey && e.shiftKey && e.key === 'Z') { e.preventDefault(); redo(); return; }
   if (e.code === 'Space') { e.preventDefault(); if (v) v.paused ? v.play() : v.pause(); }
   if (e.code === 'ArrowLeft') { e.preventDefault(); if (v) v.currentTime = Math.max(0, v.currentTime - 1/30); }
   if (e.code === 'ArrowRight') { e.preventDefault(); if (v) v.currentTime = Math.min(v.duration || 0, v.currentTime + 1/30); }

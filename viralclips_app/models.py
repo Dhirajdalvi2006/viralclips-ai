@@ -373,3 +373,27 @@ class Publication(Base, TimestampMixin):
     external_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     privacy_status: Mapped[str] = mapped_column(String(32), default="public")
+
+
+class Project(Base, TimestampMixin):
+    """An editing project: timeline state + metadata."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, default="Untitled Project")
+    description: Mapped[str] = mapped_column(Text, default="")
+
+    # Project settings
+    duration: Mapped[float] = mapped_column(Float, default=0.0)
+    resolution: Mapped[str] = mapped_column(String(16), default="1080x1920")
+    frame_rate: Mapped[int] = mapped_column(Integer, default=30)
+    aspect_ratio: Mapped[str] = mapped_column(String(16), default="9:16")
+
+    # Complete editing state stored as JSON
+    timeline_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    export_config: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # Status
+    status: Mapped[str] = mapped_column(String(32), default="draft")
+    version: Mapped[int] = mapped_column(Integer, default=1)
