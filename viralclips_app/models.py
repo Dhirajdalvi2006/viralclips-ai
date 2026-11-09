@@ -92,6 +92,10 @@ class Channel(Base, TimestampMixin):
     paused: Mapped[bool] = mapped_column(Boolean, default=False)
     check_interval_minutes: Mapped[int] = mapped_column(Integer, default=60)
 
+    #: The channel's public handle, e.g. "@indiasgotlatentofficial".
+    #: Kept for display only -- the id is the identity.
+    handle: Mapped[str | None] = mapped_column(String(160), nullable=True)
+
     last_checked_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime, nullable=True)
     next_check_at: Mapped[dt.datetime | None] = mapped_column(
@@ -130,6 +134,13 @@ class Episode(Base, TimestampMixin):
     processed_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime, nullable=True)
     source_file: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    #: Whether this upload may be processed. Detection is not permission:
+    #: a public channel gives no right to download, edit or republish.
+    #: "awaiting_authorization" | "authorized" | "not_authorized"
+    authorization_state: Mapped[str] = mapped_column(
+        String(32), default="awaiting_authorization")
+    authorization_note: Mapped[str] = mapped_column(Text, default="")
 
     channel: Mapped[Channel] = relationship(back_populates="episodes")
 
@@ -196,6 +207,32 @@ class Clip(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text, default="")
     hashtags: Mapped[str] = mapped_column(Text, default="")
     caption_style: Mapped[str] = mapped_column(String(64), default="default")
+
+    # --- V2 intelligence -------------------------------------------------
+    #: The individual signal scores behind the overall score, e.g.
+    #: {"hook_strength": 71.0, "comedy_potential": 44.0, ...}. Storing
+    #: the components is what makes the score explainable: the result
+    #: can be recomputed from them, and the UI can show why a clip won.
+    signals: Mapped[dict] = mapped_column(JSON, default=dict)
+    #: "estimated" for every intelligence score. There is no "measured"
+    #: value unless the user supplies authorised analytics, and this
+    #: application never invents one.
+    score_kind: Mapped[str] = mapped_column(String(32), default="estimated")
+    #: Why this moment was selected, in one or two sentences.
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    #: Where the intelligence came from: "ai" or "heuristic". Null means
+    #: the clip predates the V2 layer.
+    intelligence_source: Mapped[str | None] = mapped_column(String(32),
+                                                            nullable=True)
+    #: Suggestions from the intelligence layer. These are kept separate
+    #: from title/description/hashtags so a reviewer's own wording is
+    #: never overwritten by a later analysis.
+    suggested_title: Mapped[str | None] = mapped_column(String(400),
+                                                        nullable=True)
+    suggested_description: Mapped[str | None] = mapped_column(Text,
+                                                              nullable=True)
+    suggested_hashtags: Mapped[str | None] = mapped_column(Text,
+                                                            nullable=True)
 
     file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     poster_path: Mapped[str | None] = mapped_column(Text, nullable=True)

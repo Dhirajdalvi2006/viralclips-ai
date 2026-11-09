@@ -81,11 +81,43 @@ def _sync_columns() -> None:
                 connection.execute(statement)
 
 
+def _backfill_defaults() -> None:
+    """Fill in values for columns that were added to existing rows.
+
+    ``ALTER TABLE ... ADD COLUMN`` leaves every pre-existing row with a
+    NULL in the new column, even when the column has a default. The
+    rows are still correct -- a NULL authorization state is read as
+    "awaiting an authorised source" -- but an explicit value is clearer
+    and survives a future change of default.
+
+    Only rows whose value is NULL are touched. Nothing that was actually
+    recorded is overwritten.
+    """
+    from sqlalchemy import text
+
+    statements = [
+        # A detected upload that predates the authorisation column was
+        # never authorised, so it waits for an authorised source.
+        ('UPDATE "episodes" SET "authorization_state" = \'awaiting_authorization\''
+         ' WHERE "authorization_state" IS NULL'),
+        ('UPDATE "episodes" SET "authorization_note" = \'\''
+         ' WHERE "authorization_note" IS NULL'),
+        # The intelligence columns are only meaningful for clips that were
+        # analysed by the V2 layer; older clips keep a null source.
+        ('UPDATE "clips" SET "score_kind" = \'estimated\''
+         ' WHERE "score_kind" IS NULL'),
+    ]
+    for statement in statements:
+        with engine.begin() as connection:
+            connection.execute(text(statement))
+
+
 def init_db() -> None:
     """Create any missing tables and columns. Safe to call on every startup."""
     from . import models  # noqa: F401  (import registers the models)
     Base.metadata.create_all(engine)
     _sync_columns()
+    _backfill_defaults()
 
 
 @contextmanager

@@ -179,6 +179,14 @@ def run_process_job(job: dict) -> None:
                 description=clip_result.description,
                 hashtags=" ".join(clip_result.hashtags),
                 caption_style=options.get("style", "default"),
+                # --- V2 intelligence ---
+                signals=dict(clip_result.signals or {}),
+                score_kind=clip_result.score_kind or "estimated",
+                explanation=clip_result.explanation or "",
+                intelligence_source=clip_result.intelligence_source,
+                suggested_title=clip_result.suggested_title,
+                suggested_description=clip_result.suggested_description,
+                suggested_hashtags=clip_result.suggested_hashtags,
                 file_path=clip_result.file_path,
                 poster_path=clip_result.poster_path,
                 srt_path=clip_result.srt_path,
@@ -205,6 +213,19 @@ def run_process_job(job: dict) -> None:
         LOGGER.info(
             "Job %s: complete. %s clip(s). Heuristic scoring only -- no AI "
             "reranking (%s).", job_id, len(result.clips), reason)
+
+    # The intelligence layer is reported separately from the upstream
+    # reranker, because they are different things: the reranker adjusts
+    # scores, the intelligence layer chooses the moments.
+    if result.intelligence_used:
+        LOGGER.info(
+            "Job %s: intelligence analysis by %s (%s).",
+            job_id, result.intelligence_provider, result.intelligence_model)
+    elif result.intelligence_error:
+        LOGGER.info(
+            "Job %s: intelligence analysis fell back to offline signals (%s).",
+            job_id, result.intelligence_error)
+
     jobs.update_progress(job_id, "complete",
                          done=len(result.clips), total=len(result.clips))
 

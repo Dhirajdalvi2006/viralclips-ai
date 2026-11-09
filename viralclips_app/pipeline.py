@@ -72,6 +72,19 @@ class ClipResult:
     srt_path: str | None = None
     meta_path: str | None = None
     transcript: str = ""
+    # --- V2 intelligence ---
+    #: The individual signal scores behind the overall score.
+    signals: dict = field(default_factory=dict)
+    #: "estimated" for every intelligence score. There is no measured
+    #: value without authorised audience analytics, and none is invented.
+    score_kind: str = "estimated"
+    #: Why this moment was selected.
+    explanation: str = ""
+    #: "ai" or "heuristic" -- where the intelligence came from.
+    intelligence_source: str | None = None
+    suggested_title: str | None = None
+    suggested_description: str | None = None
+    suggested_hashtags: str | None = None
 
 
 @dataclass
@@ -97,6 +110,18 @@ class ProcessResult:
     render_errors: list = field(default_factory=list)
     error: str | None = None
     stats: dict = field(default_factory=dict)
+
+    # --- V2 intelligence -------------------------------------------------
+    #: True only when the intelligence layer reached the AI provider.
+    intelligence_used: bool = False
+    #: "ai" or "heuristic" -- where the moment analysis came from.
+    intelligence_source: str | None = None
+    intelligence_provider: str | None = None
+    intelligence_model: str | None = None
+    #: Why the intelligence layer did not produce an AI result, if it did
+    #: not. The run still succeeds; the clips are simply not
+    #: AI-analysed, and the UI says so.
+    intelligence_error: str | None = None
 
 
 def build_options(task_like) -> dict:
@@ -137,6 +162,10 @@ def build_options(task_like) -> dict:
         "centers": [0.25, 0.75],
         "caption": None,
     }
+    # NOTE: the V2 intelligence layer is deliberately *not* an entry in
+    # this dict. Upstream validates the option keys and rejects anything
+    # it does not recognise, so the intelligence switch is a separate
+    # argument to ``process()`` instead.
 
     model = get("ai_model", None) or config.DEFAULT_AI_MODEL
     provider = config.DEFAULT_AI_PROVIDER
@@ -313,13 +342,178 @@ def _collect_clips(project_path: Path, state: dict) -> list:
     return clips
 
 
+def _overlap_seconds(a_start: float, a_end: float,
+                     b_start: float, b_end: float) -> float:
+    """Seconds covered by both ranges."""
+    return max(0.0, min(a_end, b_end) - max(a_start, b_start))
+
+
+def _analyse_moments(project_path: Path, source_path: Path | None,
+                      options: dict, ai_model: str | None,
+                      ai_provider: str | None):
+    """Run the V2 intelligence layer over a project's transcript."""
+    from . import intelligence
+
+    utterances = intelligence.load_transcript(project_path)
+    if not utterances:
+        return None
+    return intelligence.detect_moments(
+        utterances,
+        source_path=source_path,
+        count=int(options.get("max_clips", 3)) or 3,
+        min_seconds=int(options.get("min_len", 15)),
+        max_seconds=int(options.get("max_len", 90)),
+        provider=ai_provider,
+        model=ai_model,
+    )
+
+
+def _render_moment(moment, source_path: Path, project_path: Path,
+                   out_dir: Path, options: dict) -> Path | None:
+    """Render one intelligent moment with the preserved Chopify engine."""
+    transcript_path = project_path / "transcript.json"
+    try:
+        output = rerender(source_path, moment.start, moment.end, options,
+                          out_dir, transcript_path)
+    except Exception:  # noqa: BLE001 - a failed render must not lose the run
+        return None
+    return Path(output) if Path(output).is_file() else None
+
+
+def _apply_intelligence(clips: list, result, project_path: Path,
+                        source_path: Path | None, options: dict,
+                        project_id: str) -> list:
+    """Fold the intelligence layer into the rendered clips.
+
+    Two things happen:
+
+    1. Every existing clip that overlaps an intelligent moment inherits
+       that moment's signals, score and explanation. The clip's own
+       score is replaced by the multi-signal score, which is why the
+       dashboard can show *why* a clip was chosen.
+    2. A clip whose boundaries sit well away from the intelligent
+       moment's boundaries is **re-rendered** at the moment's
+       boundaries, because a cut in the middle of a sentence is exactly
+       what the intelligence layer exists to prevent.
+
+    A moment that the engine did not cover at all is rendered as a
+    genuinely new clip, using the same rendering engine.
+    """
+    from . import intelligence
+
+    if not result.moments:
+        return clips
+
+    out_dir = config.CLIP_DIR / f"project-{project_id}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    max_clips = int(options.get("max_clips", 3)) or len(clips) or 3
+
+    # --- 1. attach intelligence to the clips that already exist ------
+    for clip in clips:
+        best = None
+        best_overlap = 0.0
+        for moment in result.moments:
+            overlap = _overlap_seconds(clip.start, clip.end,
+                                       moment.start, moment.end)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best = moment
+        if best is None or best_overlap < 0.5 * max(clip.duration, 0.001):
+            continue
+
+        clip.signals = dict(best.signals)
+        clip.score = best.score
+        clip.score_kind = "estimated"
+        clip.explanation = best.explanation or clip.reason
+        clip.intelligence_source = best.source
+        clip.suggested_title = best.title or None
+        clip.suggested_description = best.description or None
+        clip.suggested_hashtags = (
+            " ".join("#" + tag for tag in best.hashtags) or None)
+
+        # --- 2. re-cut the clip at the intelligent boundaries ---------
+        drift = (abs(best.start - clip.start) + abs(best.end - clip.end))
+        if drift > 1.5 and source_path is not None:
+            output = _render_moment(best, source_path, project_path, out_dir,
+                                    options)
+            if output is not None:
+                clip.start = round(best.start, 2)
+                clip.end = round(best.end, 2)
+                clip.duration = round(best.end - best.start, 2)
+                clip.file_path = str(output)
+                poster = output.with_suffix(".png")
+                if poster.is_file():
+                    clip.poster_path = str(poster)
+                srt = output.with_suffix(".srt")
+                if srt.is_file():
+                    clip.srt_path = str(srt)
+                meta = output.with_suffix(".meta.json")
+                if meta.is_file():
+                    clip.meta_path = str(meta)
+
+    # --- 3. render moments the engine did not cover at all -----------
+    for moment in result.moments:
+        if len(clips) >= max_clips:
+            break
+        covered = any(
+            _overlap_seconds(clip.start, clip.end, moment.start, moment.end)
+            >= 0.5 * moment.duration for clip in clips)
+        if covered:
+            continue
+        if source_path is None:
+            continue
+        output = _render_moment(moment, source_path, project_path, out_dir,
+                                options)
+        if output is None:
+            continue
+        poster = output.with_suffix(".png")
+        srt = output.with_suffix(".srt")
+        meta = output.with_suffix(".meta.json")
+        clips.append(ClipResult(
+            index=len(clips),
+            start=round(moment.start, 2),
+            end=round(moment.end, 2),
+            duration=round(moment.end - moment.start, 2),
+            score=moment.score,
+            heuristic_score=None,
+            ai_adjustment=None,
+            ai_model=None,
+            reason=moment.explanation or "Selected by the intelligence layer.",
+            hook=(moment.title or "").lower()[:60],
+            title=moment.title or "Untitled moment",
+            description=moment.description or "",
+            hashtags=list(moment.hashtags),
+            file_path=str(output),
+            poster_path=str(poster) if poster.is_file() else None,
+            srt_path=str(srt) if srt.is_file() else None,
+            meta_path=str(meta) if meta.is_file() else None,
+            transcript=moment.text,
+            signals=dict(moment.signals),
+            score_kind="estimated",
+            explanation=moment.explanation,
+            intelligence_source=moment.source,
+            suggested_title=moment.title or None,
+            suggested_description=moment.description or None,
+            suggested_hashtags=(" ".join("#" + tag for tag in moment.hashtags)
+                                or None),
+        ))
+
+    clips.sort(key=lambda clip: (-clip.score, clip.start))
+    for index, clip in enumerate(clips):
+        clip.index = index
+    return clips
+
+
 def process(source: str, options: dict, ai_model: str | None = None,
-            ai_provider: str | None = None,
-            progress=None) -> ProcessResult:
+            ai_provider: str | None = None, progress=None,
+            intelligence_enabled: bool = True) -> ProcessResult:
     """Run the full pipeline over a source video.
 
     ``source`` is a local file path or an authorized URL.
     ``options`` is an upstream options dict (see ``build_options``).
+    ``intelligence_enabled`` turns the V2 intelligence layer on or off.
+    It is an argument rather than an option because upstream validates
+    the option keys and rejects anything it does not recognise.
     """
     project_root = config.PROJECT_DIR
     project_root.mkdir(parents=True, exist_ok=True)
@@ -375,6 +569,31 @@ def process(source: str, options: dict, ai_model: str | None = None,
 
     clips = _collect_clips(path, final)
 
+    # --- V2 intelligence -----------------------------------------------
+    intelligence_result = None
+    intelligence_error = None
+    if intelligence_enabled:
+        source_path = None
+        try:
+            project_state = projects.read_project(path)
+            candidate = Path(project_state.get("source", ""))
+            if candidate.is_file():
+                source_path = candidate
+        except (OSError, ValueError, KeyError):
+            source_path = None
+
+        try:
+            intelligence_result = _analyse_moments(
+                path, source_path, options, active_model, active_provider)
+        except Exception as exc:  # noqa: BLE001 - never lose the run
+            intelligence_error = f"{type(exc).__name__}: {exc}"
+
+        if intelligence_result is not None:
+            if intelligence_result.error:
+                intelligence_error = intelligence_result.error
+            clips = _apply_intelligence(clips, intelligence_result, path,
+                                        source_path, options, project_id)
+
     return ProcessResult(
         project_id=project_id,
         project_path=str(path),
@@ -387,6 +606,15 @@ def process(source: str, options: dict, ai_model: str | None = None,
         clips=clips,
         render_errors=final.get("render_errors") or [],
         stats=stats,
+        intelligence_used=bool(intelligence_result and intelligence_result.used_ai),
+        intelligence_source=(intelligence_result.moments[0].source
+                             if intelligence_result and intelligence_result.moments
+                             else None),
+        intelligence_provider=(intelligence_result.provider
+                               if intelligence_result else None),
+        intelligence_model=(intelligence_result.model
+                           if intelligence_result else None),
+        intelligence_error=intelligence_error,
     )
 
 

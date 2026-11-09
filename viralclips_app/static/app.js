@@ -77,6 +77,10 @@ const ICONS = {
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7L12 19"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></svg>',
   video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 10l4.55-2.28A1 1 0 0121 8.62v6.76a1 1 0 01-1.45.9L15 14"/><rect x="3" y="6" width="12" height="12" rx="2"/></svg>',
+  expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3M16 21h3a2 2 0 002-2v-3"/></svg>',
+  volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  spark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.9 5.6L19.5 9l-5.6 1.9L12 16.5l-1.9-5.6L4.5 9l5.6-1.4z"/></svg>',
 };
 
 function icon(name, cls = '') {
@@ -384,21 +388,32 @@ function navigate(route) {
   render();
 }
 
+//: Incremented on every render. A render whose token is no longer the
+//: current one has been superseded and must not touch the view. Without
+//: this, two overlapping renders (a hash change while a previous load is
+//: still in flight, for example) can write to the view out of order and
+//: leave the wrong screen on screen.
+let renderToken = 0;
+
 async function render() {
-  const entry = ROUTES[State.route] || ROUTES.overview;
+  const token = ++renderToken;
+  const route = State.route;
+  const entry = ROUTES[route] || ROUTES.overview;
   const view = $('#view');
   view.innerHTML = '';
   try {
     const data = await entry.loader();
+    if (token !== renderToken) return;   // a newer render won
     view.innerHTML = '';
     view.append(entry.renderer(data));
   } catch (error) {
+    if (token !== renderToken) return;
     view.innerHTML = '';
     view.append(el('div', { class: 'card' },
       el('div', { class: 'card-body' },
         el('div', { class: 'note err' },
           el('strong', { text: 'Could not load this view. ' }),
-          el('span', { text: error.message })))));
+          el('span', { text: error.message }))))); 
   }
 }
 
@@ -567,7 +582,8 @@ function recentClipsCard(clips) {
     const table = el('table');
     table.append(el('thead', {}, el('tr', {},
       el('th', { text: 'Clip' }), el('th', { text: 'Score' }),
-      el('th', { text: 'Approval' }), el('th', { text: 'Published' }))));
+      el('th', { text: 'Approval' }), el('th', { text: 'Published' }),
+      el('th', { class: 'num', text: '' }))));
     const tbody = el('tbody');
     for (const clip of clips) {
       tbody.append(el('tr', {
@@ -579,7 +595,14 @@ function recentClipsCard(clips) {
         el('td', { class: 'num', style: `font-weight:650;color:${scoreColor(clip.score)}`,
           text: clip.score.toFixed(2) }),
         el('td', {}, statusBadge(clip.approval_status)),
-        el('td', {}, statusBadge(clip.publish_status))));
+        el('td', {}, statusBadge(clip.publish_status)),
+        el('td', { class: 'num' }, el('button', {
+          class: 'btn sm',
+          onclick: (event) => {
+            event.stopPropagation();
+            openClipPreview(clip, { onChange: () => render() });
+          },
+        }, icon('play'), 'Preview'))));
     }
     table.append(tbody);
     body.append(el('div', { class: 'table-wrap' }, table));
@@ -973,6 +996,12 @@ registerRoute('channels',
             statusBadge(channel.paused ? 'paused' : channel.monitoring ? 'connected' : 'not_published')),
           el('div', { class: 'card-body' },
             el('div', { class: 'kv' },
+              el('dt', { text: 'Handle' }), el('dd', { text: channel.handle || '—' }),
+              el('dt', { text: 'Channel URL' }),
+              el('dd', {}, el('a', {
+                href: channel.channel_url, target: '_blank', rel: 'noopener',
+                style: 'font-size:12px', text: channel.channel_url || '—',
+              })),
               el('dt', { text: 'Episodes found' }), el('dd', { text: fmt(channel.episodes) }),
               el('dt', { text: 'Processed' }), el('dd', { text: fmt(channel.processed) }),
               el('dt', { text: 'Last checked' }), el('dd', { text: fmtWhen(channel.last_checked_at) }),
@@ -1041,33 +1070,103 @@ registerRoute('channels',
       table.append(el('thead', {}, el('tr', {},
         el('th', { text: 'Episode' }), el('th', { text: 'Video ID' }),
         el('th', { text: 'Published' }), el('th', { text: 'Detected' }),
-        el('th', { text: 'Status' }), el('th', { class: 'num', text: '' }))));
+        el('th', { text: 'Processing rights' }), el('th', { text: 'Status' }),
+        el('th', { class: 'num', text: '' }))));
       const tbody = el('tbody');
       for (const episode of episodes) {
+        const state = episode.authorization_state || 'awaiting_authorization';
+        const titleCell = el('td', {},
+          el('div', { style: 'display:flex;align-items:center;gap:9px' },
+            episode.thumbnail_url
+              ? el('img', {
+                  src: episode.thumbnail_url,
+                  alt: '',
+                  loading: 'lazy',
+                  style: 'width:44px;height:26px;object-fit:cover;border-radius:4px;flex:none',
+                  onerror: (event) => { event.target.remove(); },
+                })
+              : null,
+            el('div', { style: 'max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
+              text: episode.title || 'Untitled episode' })));
         tbody.append(el('tr', {},
-          el('td', {}, el('div', { style: 'max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
-            text: episode.title || 'Untitled episode' })),
+          titleCell,
           el('td', { class: 'mono', style: 'font-size:12px;color:var(--fg-muted)',
             text: episode.video_id }),
           el('td', { style: 'font-size:12px;color:var(--fg-muted)',
             text: fmtWhen(episode.published_at) }),
           el('td', { style: 'font-size:12px;color:var(--fg-muted)',
             text: fmtWhen(episode.detected_at) }),
+          el('td', {}, authorizationBadge(state)),
           el('td', {}, statusBadge(episode.processed_at ? 'completed' : 'pending')),
-          el('td', { class: 'num' }, el('a', {
-            class: 'btn sm ghost',
-            href: episode.url, target: '_blank', rel: 'noopener',
-          }, 'Open'))));
+          el('td', { class: 'num' },
+            el('div', { style: 'display:flex;gap:6px;justify-content:flex-end' },
+              el('button', {
+                class: 'btn sm',
+                onclick: async () => {
+                  const note = prompt(
+                    'Why are you authorised to process this video?\n' +
+                    '(You own it, you licensed it, or you have permission.)',
+                    episode.authorization_note || '');
+                  if (note === null) return;
+                  await setEpisodeAuthorization(episode.id, 'authorized', note);
+                },
+              }, icon('check'), 'Authorise'),
+              el('button', {
+                class: 'btn sm ghost',
+                onclick: async () => {
+                  await setEpisodeAuthorization(episode.id, 'not_authorized',
+                    episode.authorization_note || '');
+                },
+              }, 'Not authorised'),
+              el('a', {
+                class: 'btn sm ghost',
+                href: episode.url, target: '_blank', rel: 'noopener',
+              }, 'Open')))));
       }
       table.append(tbody);
       body.append(el('div', { class: 'table-wrap' }, table));
     }
     frag.append(el('div', { class: 'card', style: 'margin-top:16px' },
-      el('div', { class: 'card-head' }, el('h3', { text: 'Detected episodes' })),
+      el('div', { class: 'card-head' },
+        el('h3', { text: 'Detected episodes' }),
+        el('div', { class: 'spacer' }),
+        el('span', { class: 'badge warn',
+          text: 'Detected ≠ authorised to publish' })),
       body));
 
     return frag;
   });
+
+/**
+ * The badge for an episode's processing-rights state.
+ *
+ * "Awaiting an authorised source" is the honest state for a video that
+ * was detected on a public channel but that the user has not confirmed
+ * they may process. It is deliberately not shown as an error.
+ */
+function authorizationBadge(state) {
+  if (state === 'authorized') {
+    return el('span', { class: 'badge ok', text: 'Authorised source' });
+  }
+  if (state === 'not_authorized') {
+    return el('span', { class: 'badge err', text: 'Not authorised' });
+  }
+  return el('span', { class: 'badge warn',
+    text: 'Awaiting an authorised source' });
+}
+
+async function setEpisodeAuthorization(episodeId, state, note) {
+  try {
+    await api(`/api/episodes/${episodeId}`, {
+      method: 'PATCH',
+      body: { authorization_state: state, note: note || '' },
+    });
+    toast(state === 'authorized'
+      ? 'Episode marked as authorised.'
+      : 'Episode marked as not authorised.', 'ok');
+    render();
+  } catch (error) { toast(error.message, 'err'); }
+}
 
 function addChannel() {
   const input = el('input', { type: 'url', placeholder: 'https://www.youtube.com/@channel' });
@@ -1335,40 +1434,9 @@ registerRoute('queue',
 
 /* ══ GENERATED CLIPS ═════════════════════════════════════════════════════ */
 
-registerRoute('clips',
-  async () => api('/api/clips?limit=300'),
-  (data) => {
-    const frag = document.createDocumentFragment();
-    const clips = data.clips || [];
-    const pending = clips.filter((c) => c.approval_status === 'pending');
-
-    frag.append(el('div', { class: 'page-head' },
-      el('div', {},
-        el('h1', { text: 'Generated Clips' }),
-        el('div', { class: 'sub',
-          text: `${fmt(clips.length)} clip(s) · ${fmt(pending.length)} awaiting approval.` })),
-      el('div', { class: 'actions' },
-        pending.length
-          ? el('button', { class: 'btn success', onclick: () => batchApprove(pending.map((c) => c.id), 'approve') },
-              icon('check'), `Approve all ${pending.length}`)
-          : null,
-        el('button', { class: 'btn', onclick: () => render() }, icon('refresh'), 'Refresh'))));
-
-    if (!clips.length) {
-      frag.append(el('div', { class: 'card' },
-        el('div', { class: 'card-body' },
-          emptyState('No clips generated yet',
-            'Run a task or upload a video. Generated vertical clips will appear here for review.', 'video'))));
-      return frag;
-    }
-
-    const grid = el('div', { class: 'clip-grid' });
-    for (const clip of clips) {
-      grid.append(clipCard(clip));
-    }
-    frag.append(grid);
-    return frag;
-  });
+// The Clip Library route itself is defined further down, next to the
+// player it uses. This helper renders the compact poster card that the
+// overview and the queue screens share.
 
 function clipCard(clip) {
   const thumb = el('div', { class: 'clip-thumb' });
@@ -1417,6 +1485,472 @@ async function batchApprove(clipIds, action) {
     render();
   } catch (error) { toast(error.message, 'err'); }
 }
+
+/* ══ CLIP PLAYER ═════════════════════════════════════════════════════════ */
+
+/** Format a number of seconds as a clock value, e.g. 83 -> "1:23". */
+function fmtClock(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * A clip player with full transport controls.
+ *
+ * The video is served by the application's own media route, which
+ * implements HTTP byte ranges, so seeking inside the clip works rather
+ * than requiring the whole file to download first.
+ */
+function clipPlayer(clip) {
+  const wrap = el('div', { class: 'player' });
+  const stage = el('div', { class: 'player-stage' });
+  const video = el('video', {
+    src: `/media/clip/${clip.id}`,
+    poster: `/media/clip/${clip.id}/poster`,
+    preload: 'metadata',
+    playsinline: 'playsinline',
+  });
+  const spinner = el('div', { class: 'player-overlay' },
+    el('div', { class: 'spinner' }));
+  const errorBox = el('div', { class: 'player-overlay player-error' },
+    el('div', { class: 'player-error-body' },
+      icon('alert'),
+      el('div', { class: 't', text: 'This clip could not be loaded' }),
+      el('div', { class: 's', text: 'The rendered file may be missing from disk.' })));
+  errorBox.style.display = 'none';
+  stage.append(video, spinner, errorBox);
+
+  const playBtn = el('button', { class: 'player-btn', type: 'button',
+    'aria-label': 'Play' }, icon('play'));
+  const timeline = el('input', { type: 'range', class: 'player-timeline',
+    min: '0', max: '1000', step: '1', value: '0', 'aria-label': 'Timeline' });
+  const currentLabel = el('span', { class: 'player-time', text: '0:00' });
+  const totalLabel = el('span', { class: 'player-time dim', text: '0:00' });
+  const volume = el('input', { type: 'range', class: 'player-volume',
+    min: '0', max: '1', step: '0.05', value: '1', 'aria-label': 'Volume' });
+  const speed = el('select', { class: 'player-speed', 'aria-label': 'Playback speed' },
+    ...[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => el('option', {
+      value: String(rate), text: `${rate}×`,
+      ...(rate === 1 ? { selected: true } : {}),
+    })));
+  const fullBtn = el('button', { class: 'player-btn', type: 'button',
+    'aria-label': 'Fullscreen' }, icon('expand'));
+
+  const controls = el('div', { class: 'player-controls' },
+    el('div', { class: 'player-row' },
+      playBtn,
+      el('span', { class: 'player-time-group' }, currentLabel,
+        el('span', { class: 'dim', text: ' / ' }), totalLabel)),
+    timeline,
+    el('div', { class: 'player-row' },
+      el('span', { class: 'player-volume-wrap' }, icon('volume'), volume),
+      el('span', { class: 'spacer' }),
+      speed,
+      fullBtn));
+
+  wrap.append(stage, controls);
+
+  let scrubbing = false;
+
+  const setPlayIcon = (playing) => {
+    playBtn.innerHTML = '';
+    playBtn.append(icon(playing ? 'pause' : 'play'));
+    playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+  };
+
+  const showError = (message) => {
+    errorBox.style.display = 'flex';
+    const body = errorBox.querySelector('.player-error-body');
+    if (body && message) {
+      const sub = body.querySelector('.s');
+      if (sub) sub.textContent = message;
+    }
+    spinner.style.display = 'none';
+  };
+
+  video.addEventListener('loadedmetadata', () => {
+    totalLabel.textContent = fmtClock(video.duration);
+    timeline.max = String(Math.max(1, Math.round(video.duration * 100)));
+    spinner.style.display = 'none';
+  });
+  video.addEventListener('durationchange', () => {
+    if (Number.isFinite(video.duration)) {
+      totalLabel.textContent = fmtClock(video.duration);
+      timeline.max = String(Math.max(1, Math.round(video.duration * 100)));
+    }
+  });
+  video.addEventListener('waiting', () => { spinner.style.display = 'flex'; });
+  video.addEventListener('playing', () => {
+    spinner.style.display = 'none';
+    setPlayIcon(true);
+  });
+  video.addEventListener('pause', () => setPlayIcon(false));
+  video.addEventListener('ended', () => setPlayIcon(false));
+  video.addEventListener('error', () => {
+    showError('The rendered file may be missing from disk.');
+  });
+  video.addEventListener('timeupdate', () => {
+    if (scrubbing) return;
+    currentLabel.textContent = fmtClock(video.currentTime);
+    const duration = Number.isFinite(video.duration) && video.duration > 0
+      ? video.duration : 0;
+    timeline.value = String(Math.round(video.currentTime * 100));
+    const percent = duration ? (video.currentTime / duration) * 100 : 0;
+    timeline.style.setProperty('--played', `${percent}%`);
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (video.paused) video.play().catch(() => showError('Playback was blocked by the browser.'));
+    else video.pause();
+  });
+  video.addEventListener('click', () => {
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+  });
+  timeline.addEventListener('pointerdown', () => { scrubbing = true; });
+  timeline.addEventListener('pointerup', () => { scrubbing = false; });
+  timeline.addEventListener('input', () => {
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    if (!duration) return;
+    const seconds = (Number(timeline.value) / 100);
+    video.currentTime = seconds;
+    currentLabel.textContent = fmtClock(seconds);
+    timeline.style.setProperty('--played',
+      `${(seconds / duration) * 100}%`);
+  });
+  volume.addEventListener('input', () => {
+    video.volume = Number(volume.value);
+    video.muted = video.volume === 0;
+  });
+  speed.addEventListener('change', () => {
+    video.playbackRate = Number(speed.value);
+  });
+  fullBtn.addEventListener('click', () => {
+    const target = document.fullscreenElement ? document : stage;
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else if (target.requestFullscreen) target.requestFullscreen().catch(() => {});
+  });
+
+  return wrap;
+}
+
+/* ══ CLIP LIBRARY ═══════════════════════════════════════════════════════ */
+
+const CLIP_FILTERS = [
+  { key: 'all', label: 'All Clips' },
+  { key: 'pending', label: 'Pending Review' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'rejected', label: 'Rejected' },
+  { key: 'published', label: 'Published' },
+];
+
+const CLIP_SORTS = [
+  { key: 'score', label: 'Highest Score' },
+  { key: 'newest', label: 'Newest' },
+  { key: 'oldest', label: 'Oldest' },
+  { key: 'longest', label: 'Longest' },
+  { key: 'shortest', label: 'Shortest' },
+];
+
+State.clipFilter = State.clipFilter || 'all';
+State.clipSort = State.clipSort || 'score';
+State.clipSearch = State.clipSearch || '';
+
+/**
+ * Render the named signals as a compact breakdown.
+ *
+ * Only signals that were actually measured for this clip are shown. The
+ * weight registry lists every signal the system knows about, so using it
+ * as the row list would draw eight empty bars for a clip that has no
+ * signal data at all -- for example a clip rendered before the V2
+ * intelligence layer existed.
+ */
+function signalBreakdown(clip) {
+  const signals = clip.signals || {};
+  const labels = clip.signal_labels || {};
+  const names = Object.keys(signals);
+  if (!names.length) return null;
+
+  const rows = el('div', { class: 'signal-list' });
+  for (const name of names) {
+    const value = Number(signals[name]);
+    const pct = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+    const fill = el('div', { class: 'signal-fill' });
+    fill.style.width = `${pct}%`;
+    rows.append(el('div', { class: 'signal-row' },
+      el('span', { class: 'signal-name', text: labels[name] || name }),
+      el('span', { class: 'signal-track' }, fill),
+      el('span', { class: 'signal-value', text: Number.isFinite(value)
+        ? value.toFixed(0) : '—' })));
+  }
+  return rows;
+}
+
+/** The poster image, with a designed fallback when there is none. */
+function clipPoster(clip, { className = '' } = {}) {
+  const frame = el('div', { class: `clip-poster ${className}`.trim() });
+  if (clip.file_path) {
+    const img = el('img', {
+      src: `/media/clip/${clip.id}/poster`,
+      alt: clip.title || 'Clip poster',
+      loading: 'lazy',
+    });
+    img.addEventListener('error', () => {
+      img.remove();
+      frame.append(el('div', { class: 'clip-poster-fallback' },
+        icon('video'),
+        el('span', { text: 'No poster' })));
+    });
+    frame.append(img);
+  } else {
+    frame.append(el('div', { class: 'clip-poster-fallback' },
+      icon('video'), el('span', { text: 'Not rendered' })));
+  }
+  return frame;
+}
+
+/** Open the full clip preview: player on the left, detail on the right. */
+async function openClipPreview(clip, { onChange } = {}) {
+  let detail;
+  try {
+    detail = await api(`/api/clips/${clip.id}`);
+  } catch (error) {
+    toast(error.message, 'err');
+    return;
+  }
+  const full = detail.clip;
+
+  const scoreLabel = el('div', { class: 'preview-score' },
+    el('span', { class: 'preview-score-value',
+      style: `color:${scoreColor(full.score)}`,
+      text: Number(full.score ?? 0).toFixed(1) }),
+    el('span', { class: 'preview-score-caption' },
+      el('strong', { text: 'Estimated engagement' }),
+      el('span', { text: ` · ${full.score_kind || 'estimated'}` })));
+
+  const signals = signalBreakdown(full);
+
+  const explanation = full.explanation || full.reason || '';
+
+  const right = el('div', { class: 'preview-right' },
+    el('h3', { class: 'preview-title', text: full.title || `Clip ${full.index + 1}` }),
+    el('div', { class: 'preview-sub', text: full.source_video_title
+      || `Source video #${full.video_id ?? '—'}` }),
+    scoreLabel,
+    signals ? el('div', { class: 'preview-block' },
+      el('div', { class: 'fieldset-title', text: 'Why this moment was selected' }),
+      signals) : null,
+    explanation ? el('div', { class: 'preview-block' },
+      el('div', { class: 'fieldset-title', text: 'Explanation' }),
+      el('div', { class: 'note', text: explanation })) : null,
+    full.transcript ? el('div', { class: 'preview-block' },
+      el('div', { class: 'fieldset-title', text: 'Transcript excerpt' }),
+      el('div', { class: 'note mono transcript', text: full.transcript })) : null,
+    el('div', { class: 'preview-block' },
+      el('div', { class: 'fieldset-title', text: 'Moment' }),
+      el('div', { class: 'kv' },
+        el('dt', { text: 'Start' }),
+        el('dd', { class: 'mono', text: `${Number(full.start_seconds ?? 0).toFixed(2)}s` }),
+        el('dt', { text: 'End' }),
+        el('dd', { class: 'mono', text: `${Number(full.end_seconds ?? 0).toFixed(2)}s` }),
+        el('dt', { text: 'Duration' }),
+        el('dd', { text: fmtDuration(full.duration_seconds) }),
+        el('dt', { text: 'Resolution' }),
+        el('dd', { text: full.resolution || '—' }),
+        el('dt', { text: 'Aspect ratio' }),
+        el('dd', { text: full.aspect_ratio || '—' }),
+        el('dt', { text: 'Created' }),
+        el('dd', { text: fmtDateTime(full.created_at) }))),
+    full.description ? el('div', { class: 'preview-block' },
+      el('div', { class: 'fieldset-title', text: 'Description' }),
+      el('div', { class: 'note', text: full.description })) : null,
+    full.hashtags ? el('div', { class: 'preview-block' },
+      el('div', { class: 'fieldset-title', text: 'Hashtags' }),
+      el('div', { class: 'tag-row' },
+        ...String(full.hashtags).split(/\s+/).filter(Boolean)
+          .map((tag) => el('span', { class: 'tag', text: tag })))) : null,
+    full.suggested_hashtags && !full.hashtags
+      ? el('div', { class: 'preview-block' },
+          el('div', { class: 'fieldset-title', text: 'Suggested hashtags' }),
+          el('div', { class: 'tag-row' },
+            ...String(full.suggested_hashtags).split(/\s+/).filter(Boolean)
+              .map((tag) => el('span', { class: 'tag', text: tag })))) : null);
+
+  const statusSlot = el('div', { class: 'preview-status' });
+  const refreshStatus = (status) => {
+    statusSlot.innerHTML = '';
+    statusSlot.append(statusBadge(status));
+  };
+  refreshStatus(full.approval_status);
+
+  const setApproval = async (status) => {
+    try {
+      await api(`/api/clips/${full.id}`, {
+        method: 'PATCH', body: { approval_status: status },
+      });
+      full.approval_status = status;
+      refreshStatus(status);
+      toast(`Clip ${status}.`, 'ok');
+      if (onChange) onChange(full);
+    } catch (error) { toast(error.message, 'err'); }
+  };
+
+  const actions = el('div', { class: 'preview-actions' },
+    el('button', { class: 'btn success', onclick: () => setApproval('approved') },
+      icon('check'), 'Approve'),
+    el('button', { class: 'btn danger', onclick: () => setApproval('rejected') },
+      icon('x'), 'Reject'),
+    el('button', { class: 'btn', onclick: async () => {
+      if (!await confirmDialog('Regenerate clip',
+        'Render this clip again with the current caption style?', 'Regenerate')) return;
+      toast('Regenerating…', 'info');
+      try {
+        await api(`/api/clips/${full.id}`, { method: 'PATCH', body: { rerender: true } });
+        toast('Clip regenerated.', 'ok');
+        if (onChange) onChange(full);
+      } catch (error) { toast(error.message, 'err'); }
+    } }, icon('refresh'), 'Regenerate'),
+    el('a', { class: 'btn', href: `/api/clips/${full.id}/download` },
+      icon('download'), 'Download'),
+    statusSlot);
+
+  const body = el('div', { class: 'preview-grid' },
+    el('div', { class: 'preview-left' }, clipPlayer(full)),
+    right);
+
+  body.append(actions);
+  modal({ title: full.title || 'Clip preview', body, wide: true });
+}
+
+/** A single card in the clip library. */
+function libraryCard(clip) {
+  const score = Number(clip.score ?? 0);
+  const card = el('div', { class: 'lib-card' },
+    clipPoster(clip, { className: 'lib-poster' }),
+    el('div', { class: 'lib-body' },
+      el('div', { class: 'lib-title', text: clip.title || `Clip ${clip.index + 1}` }),
+      el('div', { class: 'lib-source', text: clip.source_video_title
+        || (clip.video_id ? `Source video #${clip.video_id}` : 'Unknown source') }),
+      el('div', { class: 'lib-meta' },
+        el('span', { class: 'lib-score',
+          style: `color:${scoreColor(score)}`,
+          text: score.toFixed(1) }),
+        el('span', { class: 'lib-dot', text: '·' }),
+        el('span', { text: fmtDuration(clip.duration_seconds) }),
+        clip.resolution ? el('span', { class: 'lib-dot', text: '·' }) : null,
+        clip.resolution ? el('span', { text: clip.resolution }) : null,
+        clip.aspect_ratio ? el('span', { class: 'lib-dot', text: '·' }) : null,
+        clip.aspect_ratio ? el('span', { text: clip.aspect_ratio }) : null),
+      el('div', { class: 'lib-badges' },
+        statusBadge(clip.approval_status),
+        clip.publish_status === 'published'
+          ? el('span', { class: 'badge ok',
+              text: clip.published_platform || 'published' }) : null,
+        el('span', { class: 'badge quiet',
+          text: fmtWhen(clip.created_at) }))));
+
+  const previewBtn = el('button', { class: 'btn primary sm lib-preview',
+    onclick: (event) => {
+      event.stopPropagation();
+      openClipPreview(clip, { onChange: () => render() });
+    } }, icon('play'), 'Preview');
+  card.querySelector('.lib-body').append(el('div', { class: 'lib-actions' },
+    previewBtn,
+    el('button', { class: 'btn sm', onclick: (event) => {
+      event.stopPropagation();
+      State.selectedClip = clip.id;
+      navigate('editor');
+    } }, 'Open in editor')));
+
+  card.addEventListener('click', () => openClipPreview(clip, { onChange: () => render() }));
+  return card;
+}
+
+registerRoute('clips',
+  async () => {
+    const params = new URLSearchParams();
+    if (State.clipFilter === 'pending') params.set('approval', 'pending');
+    else if (State.clipFilter === 'approved') params.set('approval', 'approved');
+    else if (State.clipFilter === 'rejected') params.set('approval', 'rejected');
+    else if (State.clipFilter === 'published') params.set('publish_status', 'published');
+    if (State.clipSort) params.set('sort', State.clipSort);
+    if (State.clipSearch) params.set('search', State.clipSearch);
+    params.set('limit', '300');
+    const data = await api(`/api/clips?${params.toString()}`);
+    return { clips: data.clips || [] };
+  },
+  ({ clips }) => {
+    const frag = document.createDocumentFragment();
+    const pending = clips.filter((c) => c.approval_status === 'pending');
+
+    frag.append(el('div', { class: 'page-head' },
+      el('div', {},
+        el('h1', { text: 'Clip Library' }),
+        el('div', { class: 'sub',
+          text: `${fmt(clips.length)} clip(s) · ${fmt(pending.length)} awaiting approval.` })),
+      el('div', { class: 'actions' },
+        pending.length
+          ? el('button', { class: 'btn success',
+              onclick: () => batchApprove(pending.map((c) => c.id), 'approve') },
+              icon('check'), `Approve all ${pending.length}`)
+          : null,
+        el('button', { class: 'btn', onclick: () => render() },
+          icon('refresh'), 'Refresh'))));
+
+    // filter tabs
+    const tabs = el('div', { class: 'filter-tabs' });
+    for (const filter of CLIP_FILTERS) {
+      tabs.append(el('button', {
+        class: `filter-tab ${State.clipFilter === filter.key ? 'active' : ''}`.trim(),
+        onclick: () => {
+          State.clipFilter = filter.key;
+          render();
+        },
+      }, filter.label));
+    }
+
+    // sort + search
+    const sortSelect = el('select', { class: 'sort-select',
+      'aria-label': 'Sort clips' },
+      ...CLIP_SORTS.map((option) => el('option', {
+        value: option.key, text: option.label,
+        ...(State.clipSort === option.key ? { selected: true } : {}),
+      })));
+    sortSelect.addEventListener('change', () => {
+      State.clipSort = sortSelect.value;
+      render();
+    });
+
+    const searchInput = el('input', { type: 'search', class: 'search-input',
+      placeholder: 'Search titles and transcripts…', value: State.clipSearch });
+    searchInput.addEventListener('change', () => {
+      State.clipSearch = searchInput.value.trim();
+      render();
+    });
+
+    frag.append(el('div', { class: 'library-toolbar' }, tabs,
+      el('div', { class: 'spacer' }),
+      el('div', { class: 'library-tools' }, searchInput, sortSelect)));
+
+    if (!clips.length) {
+      frag.append(el('div', { class: 'card' },
+        el('div', { class: 'card-body' },
+          emptyState('No clips match this view',
+            'Run a task or upload a video. Generated vertical clips will appear here for review.',
+            'video'))));
+      return frag;
+    }
+
+    const grid = el('div', { class: 'lib-grid' });
+    for (const clip of clips) grid.append(libraryCard(clip));
+    frag.append(grid);
+    return frag;
+  });
 
 /* ══ CLIP EDITOR ═════════════════════════════════════════════════════════ */
 
@@ -1481,17 +2015,38 @@ registerRoute('editor',
     // ── right: player + details
     const right = el('div', { class: 'grid', style: 'gap:16px' });
 
-    const player = el('div', { class: 'player' });
+    const player = el('div', { class: 'player-shell' });
     if (full.file_path) {
-      player.append(el('video', {
-        src: `/media/clip/${full.id}`,
-        controls: true,
-        preload: 'metadata',
-        poster: full.poster_path ? `/media/clip/${full.id}/poster` : null,
-      }));
+      player.append(clipPlayer(full));
     } else {
       player.append(el('div', { class: 'empty', text: 'No rendered video for this clip.' }));
     }
+
+    // The signal breakdown explains why this moment was selected.
+    const editorSignals = signalBreakdown(full);
+    if (editorSignals) {
+      right.append(el('div', { class: 'card' },
+        el('div', { class: 'card-head' },
+          el('h3', { text: 'Why this moment was selected' })),
+        el('div', { class: 'card-body' },
+          editorSignals,
+          full.explanation
+            ? el('div', { class: 'note', style: 'margin-top:12px',
+                text: full.explanation })
+            : null)));
+    }
+
+    // The player goes above the metadata so the clip is the first thing
+    // the reviewer sees.
+    right.append(el('div', { class: 'card' },
+      el('div', { class: 'card-head' },
+        el('h3', { text: 'Playback' }),
+        el('div', { class: 'spacer' }),
+        el('button', {
+          class: 'btn sm',
+          onclick: () => openClipPreview(full, { onChange: () => render() }),
+        }, icon('play'), 'Full preview')),
+      el('div', { class: 'card-body' }, player)));
 
     // metadata editor
     const titleInput = el('input', { type: 'text', value: full.title || '' });

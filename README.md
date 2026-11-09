@@ -448,6 +448,8 @@ local tool that has been exercised end to end.
 | [`docs/CLI.md`](docs/CLI.md) | The engine's CLI reference |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | The engine's troubleshooting guide |
 
+| [`docs/V2_VERIFICATION_REPORT.md`](docs/V2_VERIFICATION_REPORT.md) | V2 Intelligence verification: tests, live channels, browser audit, blockers |
+
 ## Licence
 
 MIT. See [`LICENSE`](LICENSE).

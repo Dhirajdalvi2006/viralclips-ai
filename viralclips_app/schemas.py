@@ -107,6 +107,28 @@ class ChannelUpdate(BaseModel):
     check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
 
 
+class EpisodeUpdate(BaseModel):
+    """An authorisation decision for one detected upload.
+
+    A public channel gives no right to download, edit or republish its
+    videos, so an episode has to be explicitly authorised before it can
+    become a processing job.
+    """
+
+    authorization_state: str = Field(default="awaiting_authorization")
+    note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("authorization_state")
+    @classmethod
+    def _check_state(cls, value: str) -> str:
+        allowed = ("awaiting_authorization", "authorized", "not_authorized")
+        if value not in allowed:
+            raise ValueError(
+                "Authorization state must be one of: "
+                + ", ".join(allowed))
+        return value
+
+
 # --- clips ------------------------------------------------------------------
 
 class ClipUpdate(BaseModel):

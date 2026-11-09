@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from viralclips_app.db import session_scope
 from viralclips_app.models import Channel, Clip, Episode, Job, Task, Video
 
@@ -406,8 +408,18 @@ def test_media_route_returns_404_for_a_missing_clip(client):
     assert client.get("/media/clip/999999").status_code == 404
 
 
-def test_media_route_serves_an_existing_clip(client, tmp_path):
-    media = tmp_path / "clip.mp4"
+def test_media_route_serves_an_existing_clip(client):
+    """A clip inside the application's own storage is served.
+
+    The media route only serves files under the application's data
+    directory, so the fixture writes there rather than into an
+    arbitrary temporary folder.
+    """
+    from viralclips_app import config
+
+    target_dir = config.CLIP_DIR / "media-test"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    media = target_dir / "clip.mp4"
     media.write_bytes(b"not really a video")
     with session_scope() as active:
         video = Video(title="v", source="C:/tmp/v.mp4")
@@ -424,12 +436,63 @@ def test_media_route_serves_an_existing_clip(client, tmp_path):
     assert response.content == b"not really a video"
 
 
+def test_media_route_refuses_a_file_outside_the_application_storage(client):
+    """A clip whose file lives outside the data directory is refused.
+
+    The media route resolves the stored path and refuses anything that
+    is not inside the application's own storage, so a path that escapes
+    it cannot be used to read an arbitrary file.
+    """
+    import tempfile
+    from pathlib import Path
+
+    outside = Path(tempfile.mkdtemp(prefix="viralclips-outside-"))
+    media = outside / "secret.mp4"
+    media.write_bytes(b"not for serving")
+    with session_scope() as active:
+        video = Video(title="v", source="C:/tmp/v.mp4")
+        active.add(video)
+        active.flush()
+        clip = Clip(video_id=video.id, index=0, start_seconds=0.0,
+                    end_seconds=1.0, duration_seconds=1.0, score=1.0,
+                    file_path=str(media))
+        active.add(clip)
+        active.flush()
+        clip_id = clip.id
+    response = client.get(f"/media/clip/{clip_id}")
+    assert response.status_code == 404
+    assert b"not for serving" not in response.content
+
+
 # --- channels ---------------------------------------------------------------
 
 #: A syntactically valid YouTube channel id. The monitor resolves
 #: ``/channel/UC...`` URLs without needing a Data API key.
 CHANNEL_ID = "UCabcdefghijklmnopqrstuv"
 CHANNEL_URL = f"https://www.youtube.com/channel/{CHANNEL_ID}"
+
+
+@pytest.fixture(autouse=True)
+def _stub_channel_lookup(monkeypatch):
+    """Keep the channel tests offline.
+
+    Adding a channel now resolves its identity against YouTube and
+    validates it through the official RSS feed, which is the behaviour
+    the application should have. These tests use a fabricated channel
+    id, so the network step is stubbed here; the real resolution and
+    validation paths are covered by ``tests/test_app_channels.py``.
+    """
+    from viralclips_app import monitor
+
+    monkeypatch.setattr(
+        monitor, "validate_channel",
+        lambda channel_id: {"channel_id": channel_id, "validated": True,
+                            "recent_count": 3})
+    monkeypatch.setattr(
+        monitor, "fetch_channel_info",
+        lambda channel_id, key=None: {
+            "channel_id": channel_id, "name": "Stub Channel",
+            "description": "", "thumbnail_url": None, "via_api": False})
 
 
 def test_create_a_channel(client):

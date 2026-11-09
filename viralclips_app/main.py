@@ -16,18 +16,19 @@ from fastapi import (Depends, FastAPI, File, Form, HTTPException, Query,
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               PlainTextResponse, RedirectResponse,
+                               PlainTextResponse, RedirectResponse, Response,
                                StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 
-from . import ai, config, jobs, monitor, pipeline, publishing, security, storage
+from . import (ai, config, intelligence, jobs, media, monitor, pipeline,
+               publishing, security, storage)
 from .db import get_db, init_db, session_scope
 from .models import (Account, ApprovalEvent, Channel, Clip, Episode,
                      Job, Publication, Setting, Task, Video)
 from .schemas import (BatchApproval, ChannelCreate, ChannelUpdate,
-                      ClipUpdate, PublishRequest, SettingsUpdate,
-                      TaskCreate, TaskUpdate)
+                      ClipUpdate, EpisodeUpdate, PublishRequest,
+                      SettingsUpdate, TaskCreate, TaskUpdate)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -277,11 +278,30 @@ def _safe_filename(filename: str | None, default: str = "upload.mp4") -> str:
     return safe_stem
 
 
+def _gcd(a: int, b: int) -> int:
+    """Greatest common divisor, used to reduce a resolution to a ratio."""
+    while b:
+        a, b = b, a % b
+    return a or 1
+
+
 def _clip_dict(clip: Clip) -> dict:
     """Serialise a clip for the API."""
+    # The source video is read through the relationship so the library can
+    # show which video a clip came from without a second query per clip.
+    video = clip.video
+    resolution = None
+    aspect_ratio = None
+    if video is not None and video.width and video.height:
+        resolution = f"{video.width}x{video.height}"
+        divisor = _gcd(video.width, video.height)
+        aspect_ratio = f"{video.width // divisor}:{video.height // divisor}"
     return {
         "id": clip.id,
         "video_id": clip.video_id,
+        "source_video_title": video.title if video is not None else None,
+        "resolution": resolution,
+        "aspect_ratio": aspect_ratio,
         "task_id": clip.task_id,
         "job_id": clip.job_id,
         "index": clip.index,
@@ -301,6 +321,16 @@ def _clip_dict(clip: Clip) -> dict:
         "description": clip.description,
         "hashtags": clip.hashtags,
         "caption_style": clip.caption_style,
+        # --- V2 intelligence ---
+        "signals": dict(clip.signals or {}),
+        "signal_weights": dict(intelligence.SIGNAL_WEIGHTS),
+        "signal_labels": dict(intelligence.SIGNAL_LABELS),
+        "score_kind": clip.score_kind or "estimated",
+        "explanation": clip.explanation,
+        "intelligence_source": clip.intelligence_source,
+        "suggested_title": clip.suggested_title,
+        "suggested_description": clip.suggested_description,
+        "suggested_hashtags": clip.suggested_hashtags,
         "file_path": clip.file_path,
         "poster_path": clip.poster_path,
         "srt_path": clip.srt_path,
@@ -314,8 +344,9 @@ def _clip_dict(clip: Clip) -> dict:
     }
 
 
-def _job_dict(job: Job) -> dict:
-    return {
+def _job_dict(job: Job, include_clips: bool = False) -> dict:
+    clip_rows = list(job.clips or [])
+    data = {
         "id": job.id,
         "kind": job.kind,
         "status": job.status,
@@ -333,7 +364,17 @@ def _job_dict(job: Job) -> dict:
         "finished_at": job.finished_at,
         "duration_seconds": job.duration_seconds,
         "created_at": job.created_at,
+        "clip_count": len(clip_rows),
+        "approved_count": sum(1 for c in clip_rows
+                              if c.approval_status == "approved"),
+        "rejected_count": sum(1 for c in clip_rows
+                              if c.approval_status == "rejected"),
+        "pending_count": sum(1 for c in clip_rows
+                             if c.approval_status == "pending"),
     }
+    if include_clips:
+        data["clips"] = [_clip_dict(clip) for clip in clip_rows]
+    return data
 
 
 def _task_dict(task: Task) -> dict:
@@ -374,6 +415,7 @@ def _channel_dict(channel: Channel, episode_count: int = 0,
         "name": channel.name,
         "channel_id": channel.channel_id,
         "channel_url": channel.channel_url,
+        "handle": channel.handle,
         "description": channel.description,
         "thumbnail_url": channel.thumbnail_url,
         "monitoring": channel.monitoring,
@@ -855,16 +897,20 @@ def list_channels():
 @app.post("/api/channels")
 def create_channel(payload: ChannelCreate,
                    _: None = Depends(security.require_token)):
-    """Add a channel to monitor."""
+    """Add a channel to monitor.
+
+    The channel's identity is resolved and then validated against
+    YouTube's own RSS feed, so a channel is never reported as connected
+    unless YouTube actually confirms it. The name YouTube reports is
+    preferred over the caller's label, because the dashboard must show
+    the real channel name.
+    """
     try:
-        channel_id = monitor.extract_channel_id(payload.url)
+        identity = monitor.resolve_channel_identity(payload.url)
     except monitor.MonitorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    try:
-        info = monitor.fetch_channel_info(channel_id)
-    except monitor.MonitorError as exc:
-        info = {"name": "", "description": "", "thumbnail_url": None}
+    channel_id = identity["channel_id"]
 
     with session_scope() as session:
         existing = session.query(Channel).filter(
@@ -875,11 +921,12 @@ def create_channel(payload: ChannelCreate,
                 detail="That channel is already being monitored.")
 
         channel = Channel(
-            name=payload.name or info.get("name") or channel_id,
+            name=identity.get("name") or payload.name or channel_id,
             channel_id=channel_id,
             channel_url=payload.url,
-            description=info.get("description", ""),
-            thumbnail_url=info.get("thumbnail_url"),
+            handle=identity.get("handle") or None,
+            description=identity.get("description", ""),
+            thumbnail_url=identity.get("thumbnail_url"),
             check_interval_minutes=payload.check_interval_minutes,
             monitoring=True,
             paused=False,
@@ -887,7 +934,10 @@ def create_channel(payload: ChannelCreate,
         )
         session.add(channel)
         session.flush()
-        return {"channel": _channel_dict(channel)}
+        return {"channel": _channel_dict(channel),
+                "resolved_via": identity.get("resolved_via"),
+                "validated": identity.get("validated"),
+                "recent_count": identity.get("recent_count")}
 
 
 @app.patch("/api/channels/{channel_id}")
@@ -952,12 +1002,28 @@ def check_channel(channel_id: int, _: None = Depends(security.require_token)):
             existing = session.query(Episode).filter(
                 Episode.video_id == video_id).one_or_none()
             if existing is not None:
+                # The episode is already known, so it is never re-added and
+                # never re-processed. Any metadata that the feed now
+                # supplies but that was missing when it was first recorded
+                # (a thumbnail, for instance) is filled in, because that is
+                # discovery metadata and not a processing decision.
+                #
+                # Nothing about the authorisation state is touched here.
+                # A monitoring re-check must never silently grant or
+                # revoke permission to process a video.
+                if upload.get("thumbnail_url") and not existing.thumbnail_url:
+                    existing.thumbnail_url = upload["thumbnail_url"]
+                if upload.get("title") and not existing.title:
+                    existing.title = upload["title"]
+                if upload.get("url") and not existing.url:
+                    existing.url = upload["url"]
                 continue
             session.add(Episode(
                 channel_id=channel_id,
                 video_id=video_id,
                 title=upload.get("title", ""),
-                url=f"https://www.youtube.com/watch?v={video_id}",
+                url=upload.get("url")
+                or f"https://www.youtube.com/watch?v={video_id}",
                 published_at=monitor.parse_published(upload.get("published_at")),
                 thumbnail_url=upload.get("thumbnail_url") or None,
             ))
@@ -991,7 +1057,40 @@ def list_episodes(channel_id: int | None = Query(default=None),
             "detected_at": episode.detected_at,
             "processed_at": episode.processed_at,
             "source_file": episode.source_file,
+            # Detection is not permission. An episode that has not been
+            # authorised is shown as awaiting an authorised source and is
+            # never downloaded automatically.
+            "authorization_state": episode.authorization_state
+            or "awaiting_authorization",
+            "authorization_note": episode.authorization_note or "",
+            "thumbnail_url": episode.thumbnail_url,
+            "duration_seconds": episode.duration_seconds,
         } for episode in episodes]}
+
+
+@app.patch("/api/episodes/{episode_id}")
+def update_episode(episode_id: int, payload: EpisodeUpdate,
+                   _: None = Depends(security.require_token)):
+    """Record the authorisation decision for a detected upload.
+
+    Only an authorised episode may be turned into a processing job. The
+    decision and the reason are stored, so the distinction between
+    "detected" and "allowed to process" is auditable.
+    """
+    with session_scope() as session:
+        episode = session.get(Episode, episode_id)
+        if episode is None:
+            raise HTTPException(status_code=404, detail="Episode not found.")
+        episode.authorization_state = payload.authorization_state
+        episode.authorization_note = payload.note or ""
+        session.flush()
+        return {"episode": {
+            "id": episode.id,
+            "video_id": episode.video_id,
+            "title": episode.title,
+            "authorization_state": episode.authorization_state,
+            "authorization_note": episode.authorization_note or "",
+        }}
 
 
 # --- library (videos) ---------------------------------------------------------
@@ -1030,12 +1129,28 @@ def list_jobs(status: str | None = Query(default=None), limit: int = 50):
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: int):
-    """Return one job. Used by the frontend to follow a single job."""
+    """Return one job, including the clips it produced.
+
+    The clips are included so a finished job can show what it actually
+    generated, with a working preview for each one.
+    """
     with session_scope() as session:
         job = session.get(Job, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found.")
-        return _job_dict(job)
+        data = _job_dict(job, include_clips=True)
+        video = session.get(Video, job.video_id) if job.video_id else None
+        data["video"] = {
+            "id": video.id,
+            "title": video.title,
+            "source": video.source,
+            "source_type": video.source_type,
+            "duration_seconds": video.duration_seconds,
+            "width": video.width,
+            "height": video.height,
+            "size_bytes": video.size_bytes,
+        } if video is not None else None
+        return data
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -1069,17 +1184,49 @@ def retry_job(job_id: int, _: None = Depends(security.require_token)):
 def list_clips(approval: str | None = Query(default=None),
                publish_status: str | None = Query(default=None),
                task_id: int | None = Query(default=None),
+               job_id: int | None = Query(default=None),
+               search: str | None = Query(default=None, max_length=200),
+               sort: str = Query(default="newest"),
                limit: int = Query(default=200, ge=1, le=1000)):
+    """List the clip library, with the filters and sorts the UI offers.
+
+    ``sort`` accepts: ``newest`` (the default, and the V1 behaviour),
+    ``oldest``, ``score``, ``longest`` and ``shortest``.
+    """
+    orderings = {
+        "newest": Clip.created_at.desc(),
+        "oldest": Clip.created_at.asc(),
+        "score": Clip.score.desc(),
+        "longest": Clip.duration_seconds.desc(),
+        "shortest": Clip.duration_seconds.asc(),
+    }
+    if sort not in orderings:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown sort '{sort}'. Use one of: "
+                   + ", ".join(sorted(orderings)))
+
     with session_scope() as session:
-        query = select(Clip).order_by(Clip.created_at.desc())
+        query = select(Clip)
         if approval:
             query = query.where(Clip.approval_status == approval)
         if publish_status:
             query = query.where(Clip.publish_status == publish_status)
         if task_id is not None:
             query = query.where(Clip.task_id == task_id)
+        if job_id is not None:
+            query = query.where(Clip.job_id == job_id)
+        if search:
+            pattern = f"%{search.strip()}%"
+            query = query.where(
+                (Clip.title.ilike(pattern))
+                | (Clip.transcript.ilike(pattern))
+                | (Clip.category.ilike(pattern)))
+        query = query.order_by(orderings[sort])
         clips = session.execute(query.limit(limit)).scalars().all()
-        return {"clips": [_clip_dict(clip) for clip in clips]}
+        return {"clips": [_clip_dict(clip) for clip in clips],
+                "sort": sort,
+                "count": len(clips)}
 
 
 @app.get("/api/clips/{clip_id}")
@@ -1518,30 +1665,138 @@ def read_logs(lines: int = Query(default=200, ge=1, le=2000)):
 # --- media serving ---------------------------------------------------------------
 
 @app.get("/media/clip/{clip_id}")
-def serve_clip(clip_id: int):
-    """Serve a rendered clip for preview playback."""
+def serve_clip(clip_id: int, request: Request):
+    """Serve a rendered clip for preview playback.
+
+    This implements the HTTP byte-range protocol properly. Starlette's
+    ``FileResponse`` sets an ``Accept-Ranges`` header but ignores the
+    ``Range`` header, which means a browser cannot seek inside a clip --
+    it has to download the whole file first. With real range support the
+    player can jump straight to a timestamp.
+
+    The body is streamed in chunks, so a large clip is never held in
+    memory in full.
+    """
     with session_scope() as session:
         clip = session.get(Clip, clip_id)
         if clip is None or not clip.file_path:
             raise HTTPException(status_code=404, detail="Clip not found.")
-        path = Path(clip.file_path)
-        poster = Path(clip.poster_path) if clip.poster_path else None
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Clip file is missing.")
-    return FileResponse(path, media_type="video/mp4",
-                        headers={"Accept-Ranges": "bytes"})
+        raw_path = clip.file_path
+
+    try:
+        path = media.resolve_media_path(raw_path)
+    except media.MediaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    media_type = media.media_type_for(path)
+    size = path.stat().st_size
+    range_header = request.headers.get("range")
+
+    try:
+        window = media.parse_range(range_header, size)
+    except media.RangeNotSatisfiable as exc:
+        return Response(
+            status_code=416,
+            content=str(exc),
+            media_type="text/plain",
+            headers={"Content-Range": f"bytes */{size}",
+                     "Accept-Ranges": "bytes"},
+        )
+
+    if window is None:
+        return StreamingResponse(
+            media.iter_file(path),
+            media_type=media_type,
+            headers={"Accept-Ranges": "bytes",
+                     "Content-Length": str(size),
+                     "Cache-Control": "no-cache"},
+        )
+
+    start, end = window
+    return StreamingResponse(
+        media.iter_file(path, start, end),
+        status_code=206,
+        media_type=media_type,
+        headers={"Accept-Ranges": "bytes",
+                 "Content-Range": f"bytes {start}-{end}/{size}",
+                 "Content-Length": str(end - start + 1),
+                 "Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/media/clip/{clip_id}/poster")
 def serve_poster(clip_id: int):
+    """Serve the clip's poster, generating it from the clip if needed.
+
+    A real frame is extracted with FFmpeg and cached beside the clip, so
+    the library shows the actual video rather than a generic
+    placeholder. If extraction genuinely fails the request is a 404 and
+    the UI draws its own fallback.
+    """
     with session_scope() as session:
         clip = session.get(Clip, clip_id)
-        if clip is None or not clip.poster_path:
-            raise HTTPException(status_code=404, detail="Poster not found.")
-        path = Path(clip.poster_path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Poster is missing.")
-    return FileResponse(path, media_type="image/png")
+        if clip is None:
+            raise HTTPException(status_code=404, detail="Clip not found.")
+        poster_path = clip.poster_path
+        clip_path = clip.file_path
+        duration = clip.duration_seconds
+
+    if poster_path:
+        try:
+            path = media.resolve_media_path(poster_path)
+        except media.MediaError:
+            path = None
+        if path is not None and path.is_file():
+            return FileResponse(path, media_type="image/png",
+                                headers={"Cache-Control": "no-cache"})
+
+    if clip_path:
+        try:
+            video = media.resolve_media_path(clip_path)
+        except media.MediaError:
+            video = None
+        if video is not None:
+            target = video.with_suffix(".png")
+            generated = media.extract_poster(video, target, duration)
+            if generated is not None:
+                with session_scope() as session:
+                    clip = session.get(Clip, clip_id)
+                    if clip is not None:
+                        clip.poster_path = str(generated)
+                return FileResponse(generated, media_type="image/png",
+                                    headers={"Cache-Control": "no-cache"})
+
+    raise HTTPException(status_code=404, detail="Poster not found.")
+
+
+@app.post("/api/clips/{clip_id}/poster")
+def regenerate_poster(clip_id: int,
+                      _: None = Depends(security.require_token)):
+    """Regenerate a clip's poster frame from the rendered video."""
+    with session_scope() as session:
+        clip = session.get(Clip, clip_id)
+        if clip is None:
+            raise HTTPException(status_code=404, detail="Clip not found.")
+        clip_path = clip.file_path
+        duration = clip.duration_seconds
+    if not clip_path:
+        raise HTTPException(status_code=400,
+                            detail="This clip has no rendered video.")
+    try:
+        video = media.resolve_media_path(clip_path)
+    except media.MediaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    generated = media.extract_poster(video, video.with_suffix(".png"), duration)
+    if generated is None:
+        raise HTTPException(
+            status_code=500,
+            detail="A poster frame could not be extracted from this clip.")
+    with session_scope() as session:
+        clip = session.get(Clip, clip_id)
+        if clip is not None:
+            clip.poster_path = str(generated)
+        session.flush()
+        return {"poster_path": str(generated)}
 
 
 # --- live updates ------------------------------------------------------------------
