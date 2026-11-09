@@ -397,3 +397,19 @@ class Project(Base, TimestampMixin):
     # Status
     status: Mapped[str] = mapped_column(String(32), default="draft")
     version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class ExportJob(Base, TimestampMixin):
+    """A persistent render/export job."""
+
+    __tablename__ = "export_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_uuid: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    project_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    stage: Mapped[str] = mapped_column(String(64), default="queued")
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    output_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)

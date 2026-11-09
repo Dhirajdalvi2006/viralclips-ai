@@ -25,7 +25,7 @@ from . import (ai, config, intelligence, jobs, media, monitor, pipeline,
                publishing, security, storage)
 from .db import get_db, init_db, session_scope
 from .models import (Account, ApprovalEvent, Channel, Clip, Episode,
-                     Job, Project, Publication, Setting, Task, Video)
+                     ExportJob, Job, Project, Publication, Setting, Task, Video)
 from .schemas import (BatchApproval, ChannelCreate, ChannelUpdate,
                       ClipUpdate, EpisodeUpdate, PublishRequest,
                       SettingsUpdate, TaskCreate, TaskUpdate)
@@ -1935,6 +1935,87 @@ def _project_dict(p):
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }
+
+
+# --- export / rendering -----------------------------------------------------
+
+from .rendering.render_engine import RenderEngine
+
+_render_engine = RenderEngine()
+
+
+@app.post("/api/projects/{project_id}/export")
+def start_export(project_id: int, payload: dict = None):
+    payload = payload or {}
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        project_data = {
+            "id": project.id,
+            "name": project.name,
+            "timeline_data": project.timeline_data or {},
+            "duration": project.duration,
+            "resolution": project.resolution,
+        }
+    config = {
+        "width": int(payload.get("width", 1080)),
+        "height": int(payload.get("height", 1920)),
+        "fps": int(payload.get("fps", 30)),
+        "quality": payload.get("quality", "high"),
+        "filename": payload.get("filename", f"export_{project_id}.mp4"),
+        "audio_bitrate": payload.get("audio_bitrate", "192k"),
+    }
+    job = _render_engine.create_job(project_id, config)
+    # Persist job to DB
+    with session_scope() as session:
+        db_job = ExportJob(
+            job_uuid=job.job_id,
+            project_id=project_id,
+            status=job.status,
+            progress=job.progress,
+            stage=job.stage,
+            config=config,
+        )
+        session.add(db_job)
+        session.commit()
+    # Start rendering in background
+    _render_engine.start_job(job, project_data)
+    return job.to_dict()
+
+
+@app.get("/api/export/jobs")
+def list_export_jobs():
+    jobs = _render_engine.list_jobs()
+    return {"jobs": [j.to_dict() for j in jobs]}
+
+
+@app.get("/api/export/jobs/{job_id}")
+def get_export_job(job_id: str):
+    job = _render_engine.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job.to_dict()
+
+
+@app.post("/api/export/jobs/{job_id}/cancel")
+def cancel_export_job(job_id: str):
+    job = _render_engine.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    job.cancel()
+    return {"cancelled": True, "job_id": job_id}
+
+
+@app.get("/api/export/jobs/{job_id}/download")
+def download_export(job_id: str):
+    job = _render_engine.get_job(job_id)
+    if job is None or job.status != "completed" or not job.output_path:
+        raise HTTPException(status_code=404, detail="Export not ready.")
+    path = Path(job.output_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
 @app.get("/", response_class=HTMLResponse)
