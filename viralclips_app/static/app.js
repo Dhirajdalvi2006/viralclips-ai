@@ -2253,62 +2253,314 @@ registerRoute('studio',
       el('div', {},
         el('h1', { text: 'Editing Studio' }),
         el('div', { class: 'sub', text: 'Full video editing workspace with timeline, preview, and export.' }))));
-    
+
     // Studio layout
     const studio = el('div', { class: 'studio-layout' });
-    
+
     // Media panel (left)
     const mediaPanel = el('div', { class: 'studio-panel studio-media' },
       el('div', { class: 'panel-head', text: 'Media Library' }),
       el('div', { class: 'panel-body', id: 'studio-media-list' }));
     const mediaList = mediaPanel.querySelector('#studio-media-list');
     for (const c of clips.slice(0, 20)) {
-      mediaList.append(el('div', { class: 'studio-media-item', 'data-clip-id': c.id },
+      const item = el('div', { class: 'studio-media-item', 'data-clip-id': c.id },
         el('div', { class: 't', text: c.title || `Clip ${c.index + 1}` }),
-        el('div', { class: 's', text: fmtDuration(c.duration_seconds) })));
+        el('div', { class: 's', text: fmtDuration(c.duration_seconds) }));
+      item.addEventListener('dblclick', () => addToTimeline(c));
+      mediaList.append(item);
     }
-    
+
     // Preview (center)
     const previewPanel = el('div', { class: 'studio-panel studio-preview' },
       el('div', { class: 'player-shell', id: 'studio-player' },
-        el('video', { id: 'studio-video', controls: true, style: 'width:100%;max-height:400px;background:#000' })),
+        el('video', { id: 'studio-video', style: 'width:100%;max-height:360px;background:#000;border-radius:6px' })),
       el('div', { class: 'studio-controls' },
-        el('button', { class: 'btn sm', onclick: () => {
+        el('button', { class: 'btn sm', id: 'studio-play-btn', onclick: () => {
           const v = document.getElementById('studio-video');
           if (v) { v.paused ? v.play() : v.pause(); }
-        }}, 'Play/Pause'),
-        el('span', { id: 'studio-time', text: '0:00 / 0:00', style: 'margin-left:12px;font-family:monospace' })));
-    
+        }}, 'Play'),
+        el('button', { class: 'btn sm ghost', onclick: () => {
+          const v = document.getElementById('studio-video');
+          if (v) v.currentTime = Math.max(0, v.currentTime - 1/30);
+        }}, '◀ Frame'),
+        el('button', { class: 'btn sm ghost', onclick: () => {
+          const v = document.getElementById('studio-video');
+          if (v) v.currentTime = Math.min(v.duration || 0, v.currentTime + 1/30);
+        }}, 'Frame ▶'),
+        el('select', { id: 'studio-speed', style: 'margin-left:8px', onchange: (e) => {
+          const v = document.getElementById('studio-video');
+          if (v) v.playbackRate = parseFloat(e.target.value);
+        }},
+          el('option', { value: '0.25', text: '0.25x' }),
+          el('option', { value: '0.5', text: '0.5x' }),
+          el('option', { value: '1', text: '1x', selected: true }),
+          el('option', { value: '1.5', text: '1.5x' }),
+          el('option', { value: '2', text: '2x' })),
+        el('input', { type: 'range', min: '0', max: '1', step: '0.05', value: '1', id: 'studio-vol',
+          style: 'margin-left:8px;width:80px',
+          oninput: (e) => {
+            const v = document.getElementById('studio-video');
+            if (v) v.volume = parseFloat(e.target.value);
+          }}),
+        el('button', { class: 'btn sm ghost', onclick: () => {
+          const v = document.getElementById('studio-video');
+          if (v) v.requestFullscreen && v.requestFullscreen();
+        }}, 'Fullscreen'),
+        el('span', { id: 'studio-time', text: '0:00 / 0:00', style: 'margin-left:auto;font-family:monospace;font-size:12px' })));
+
     // Timeline (bottom)
     const timelinePanel = el('div', { class: 'studio-panel studio-timeline' },
-      el('div', { class: 'panel-head', text: 'Timeline' }),
+      el('div', { class: 'panel-head', style: 'display:flex;align-items:center;gap:8px' },
+        el('span', { text: 'Timeline' }),
+        el('div', { class: 'spacer' }),
+        el('button', { class: 'btn sm ghost', onclick: () => splitAtPlayhead() }, 'Split'),
+        el('button', { class: 'btn sm ghost', onclick: () => deleteSelected() }, 'Delete'),
+        el('button', { class: 'btn sm ghost', onclick: () => duplicateSelected() }, 'Duplicate'),
+        el('button', { class: 'btn sm', onclick: () => saveProject() }, 'Save'),
+        el('button', { class: 'btn sm primary', onclick: () => exportProject() }, 'Export')),
       el('div', { class: 'timeline-track', id: 'studio-timeline' },
         el('div', { class: 'timeline-ruler', id: 'studio-ruler' }),
         el('div', { class: 'timeline-clips', id: 'studio-clips' })));
-    
+
     // Properties panel (right)
     const propsPanel = el('div', { class: 'studio-panel studio-props' },
       el('div', { class: 'panel-head', text: 'Properties' }),
-      el('div', { class: 'panel-body' },
-        el('div', { class: 'prop-row' }, el('label', { text: 'Speed' }), el('input', { type: 'range', min: '0.25', max: '2', step: '0.25', value: '1', id: 'studio-speed' })),
-        el('div', { class: 'prop-row' }, el('label', { text: 'Volume' }), el('input', { type: 'range', min: '0', max: '1', step: '0.1', value: '1', id: 'studio-volume' }))));
-    
+      el('div', { class: 'panel-body', id: 'studio-props' },
+        el('div', { class: 'prop-row' }, el('label', { text: 'Clip' }), el('span', { id: 'prop-clip-name', text: 'None selected' })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Start' }), el('span', { id: 'prop-start', text: '0.00s' })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'End' }), el('span', { id: 'prop-end', text: '0.00s' })),
+        el('div', { class: 'prop-row' }, el('label', { text: 'Duration' }), el('span', { id: 'prop-dur', text: '0.00s' }))
+      )
+    );
+
     studio.append(mediaPanel, previewPanel, propsPanel, timelinePanel);
     frag.append(studio);
-    
-    // Time update
+
+    // Initialize studio state
+    if (!State.studioTimeline) State.studioTimeline = [];
+    if (!State.studioSelectedClip) State.studioSelectedClip = null;
+
+    // Render timeline
+    renderStudioTimeline();
+
+    // Time update + playhead sync
     setTimeout(() => {
       const v = document.getElementById('studio-video');
       const t = document.getElementById('studio-time');
       if (v && t) {
         v.addEventListener('timeupdate', () => {
           t.textContent = `${fmtDuration(v.currentTime)} / ${fmtDuration(v.duration || 0)}`;
+          updatePlayhead(v.currentTime);
+        });
+        v.addEventListener('play', () => {
+          const btn = document.getElementById('studio-play-btn');
+          if (btn) btn.textContent = 'Pause';
+        });
+        v.addEventListener('pause', () => {
+          const btn = document.getElementById('studio-play-btn');
+          if (btn) btn.textContent = 'Play';
         });
       }
     }, 100);
-    
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', studioKeyHandler);
+
     return frag;
   });
+
+/* Studio helper functions */
+function addToTimeline(clip) {
+  if (!State.studioTimeline) State.studioTimeline = [];
+  const lastEnd = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 0);
+  State.studioTimeline.push({
+    id: 'clip_' + Date.now(),
+    sourceClipId: clip.id,
+    src: clip.file_path ? `/media/clip/${clip.id}` : null,
+    title: clip.title || `Clip ${clip.index + 1}`,
+    start: lastEnd,
+    end: lastEnd + (clip.duration_seconds || 10),
+    trimStart: 0,
+    trimEnd: clip.duration_seconds || 10,
+    speed: 1,
+    volume: 1,
+    opacity: 1,
+  });
+  renderStudioTimeline();
+}
+
+function renderStudioTimeline() {
+  const container = document.getElementById('studio-clips');
+  if (!container) return;
+  container.innerHTML = '';
+  const totalDur = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 10);
+  const pxPerSec = Math.max(10, 600 / totalDur);
+  for (const clip of State.studioTimeline) {
+    const el2 = document.createElement('div');
+    el2.className = 'timeline-clip' + (State.studioSelectedClip && State.studioSelectedClip.id === clip.id ? ' selected' : '');
+    el2.style.left = (clip.start * pxPerSec) + 'px';
+    el2.style.width = ((clip.end - clip.start) * pxPerSec) + 'px';
+    el2.textContent = clip.title;
+    el2.addEventListener('click', () => {
+      State.studioSelectedClip = clip;
+      renderStudioTimeline();
+      updatePropsPanel(clip);
+      // Load into preview
+      const v = document.getElementById('studio-video');
+      if (v && clip.src) { v.src = clip.src; v.currentTime = 0; }
+    });
+    // Trim handles
+    const leftHandle = document.createElement('div');
+    leftHandle.className = 'trim-handle left';
+    leftHandle.addEventListener('mousedown', (e) => startTrim(e, clip, 'left'));
+    el2.append(leftHandle);
+    const rightHandle = document.createElement('div');
+    rightHandle.className = 'trim-handle right';
+    rightHandle.addEventListener('mousedown', (e) => startTrim(e, clip, 'right'));
+    el2.append(rightHandle);
+    container.append(el2);
+  }
+  // Ruler
+  const ruler = document.getElementById('studio-ruler');
+  if (ruler) {
+    ruler.innerHTML = '';
+    for (let s = 0; s <= totalDur; s += 5) {
+      const mark = document.createElement('span');
+      mark.style.position = 'absolute';
+      mark.style.left = (s * pxPerSec) + 'px';
+      mark.textContent = fmtDuration(s);
+      ruler.append(mark);
+    }
+  }
+}
+
+function updatePlayhead(time) {
+  let playhead = document.getElementById('studio-playhead');
+  if (!playhead) {
+    const timeline = document.getElementById('studio-timeline');
+    if (timeline) {
+      playhead = document.createElement('div');
+      playhead.id = 'studio-playhead';
+      playhead.className = 'playhead';
+      timeline.append(playhead);
+    }
+  }
+  if (playhead) {
+    const totalDur = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 10);
+    const pxPerSec = Math.max(10, 600 / totalDur);
+    playhead.style.left = (time * pxPerSec + 8) + 'px';
+  }
+}
+
+function updatePropsPanel(clip) {
+  const name = document.getElementById('prop-clip-name');
+  const start = document.getElementById('prop-start');
+  const end = document.getElementById('prop-end');
+  const dur = document.getElementById('prop-dur');
+  if (name) name.textContent = clip.title;
+  if (start) start.textContent = clip.start.toFixed(2) + 's';
+  if (end) end.textContent = clip.end.toFixed(2) + 's';
+  if (dur) dur.textContent = (clip.end - clip.start).toFixed(2) + 's';
+}
+
+function splitAtPlayhead() {
+  const v = document.getElementById('studio-video');
+  if (!v || !State.studioSelectedClip) return;
+  const clip = State.studioSelectedClip;
+  const splitTime = v.currentTime;
+  if (splitTime <= clip.start || splitTime >= clip.end) return;
+  const newClip = {
+    id: 'clip_' + Date.now(),
+    sourceClipId: clip.sourceClipId,
+    src: clip.src,
+    title: clip.title + ' (2)',
+    start: splitTime,
+    end: clip.end,
+    trimStart: clip.trimStart + (splitTime - clip.start),
+    trimEnd: clip.trimEnd,
+    speed: clip.speed,
+    volume: clip.volume,
+    opacity: clip.opacity,
+  };
+  clip.end = splitTime;
+  clip.trimEnd = clip.trimStart + (splitTime - clip.start);
+  const idx = State.studioTimeline.indexOf(clip);
+  State.studioTimeline.splice(idx + 1, 0, newClip);
+  State.studioSelectedClip = newClip;
+  renderStudioTimeline();
+  updatePropsPanel(newClip);
+}
+
+function deleteSelected() {
+  if (!State.studioSelectedClip) return;
+  const idx = State.studioTimeline.indexOf(State.studioSelectedClip);
+  if (idx >= 0) State.studioTimeline.splice(idx, 1);
+  State.studioSelectedClip = State.studioTimeline[0] || null;
+  renderStudioTimeline();
+  if (State.studioSelectedClip) updatePropsPanel(State.studioSelectedClip);
+}
+
+function duplicateSelected() {
+  if (!State.studioSelectedClip) return;
+  const clip = State.studioSelectedClip;
+  const newClip = { ...clip, id: 'clip_' + Date.now(), title: clip.title + ' (copy)', start: clip.end, end: clip.end + (clip.end - clip.start) };
+  State.studioTimeline.push(newClip);
+  State.studioSelectedClip = newClip;
+  renderStudioTimeline();
+  updatePropsPanel(newClip);
+}
+
+function startTrim(e, clip, side) {
+  e.preventDefault();
+  const startX = e.clientX;
+  const origStart = clip.start;
+  const origEnd = clip.end;
+  const onMove = (ev) => {
+    const dx = ev.clientX - startX;
+    const totalDur = State.studioTimeline.reduce((max, c) => Math.max(max, c.end), 10);
+    const pxPerSec = Math.max(10, 600 / totalDur);
+    const dt = dx / pxPerSec;
+    if (side === 'left') {
+      clip.start = Math.max(0, Math.min(clip.end - 0.5, origStart + dt));
+    } else {
+      clip.end = Math.max(clip.start + 0.5, origEnd + dt);
+    }
+    renderStudioTimeline();
+    if (State.studioSelectedClip && State.studioSelectedClip.id === clip.id) updatePropsPanel(clip);
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function saveProject() {
+  const project = {
+    id: 'proj_' + Date.now(),
+    timeline: State.studioTimeline,
+    savedAt: new Date().toISOString(),
+  };
+  localStorage.setItem('studio_project', JSON.stringify(project));
+  alert('Project saved locally.');
+}
+
+function exportProject() {
+  alert('Export: Use the existing clip export from the Clip Editor. Full timeline export coming in Milestone 6.');
+}
+
+function studioKeyHandler(e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  const v = document.getElementById('studio-video');
+  if (e.code === 'Space') { e.preventDefault(); if (v) v.paused ? v.play() : v.pause(); }
+  if (e.code === 'ArrowLeft') { e.preventDefault(); if (v) v.currentTime = Math.max(0, v.currentTime - 1/30); }
+  if (e.code === 'ArrowRight') { e.preventDefault(); if (v) v.currentTime = Math.min(v.duration || 0, v.currentTime + 1/30); }
+  if (e.key === 's' || e.key === 'S') { e.preventDefault(); splitAtPlayhead(); }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
+}
+
+/* ══ PUBLISHING CALENDAR ═════════════════════════════════════════════════ */
 
 /* ══ PUBLISHING CALENDAR ═════════════════════════════════════════════════ */
 
