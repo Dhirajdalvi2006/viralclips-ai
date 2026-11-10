@@ -2006,6 +2006,60 @@ def cancel_export_job(job_id: str):
     job.cancel()
     return {"cancelled": True, "job_id": job_id}
 
+@app.post("/api/projects/{project_id}/publish")
+def publish_project(project_id: int, payload: dict, _: None = Depends(security.require_token)):
+    """Publish a rendered project export to selected platforms."""
+    import json as _json
+    with session_scope() as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        # Find the latest completed export job
+        export_job = session.query(ExportJob).filter(
+            ExportJob.project_id == project_id,
+            ExportJob.status == "completed",
+        ).order_by(ExportJob.created_at.desc()).first()
+        if export_job is None or not export_job.output_path:
+            raise HTTPException(status_code=400, detail="No rendered export found. Render the project first.")
+        output_path = export_job.output_path
+
+    platform = payload.get("platform", "youtube")
+    caption = payload.get("caption", "")
+    hashtags = payload.get("hashtags", "")
+    title = payload.get("title", project.name if project else "Untitled")
+    privacy = payload.get("privacy_status", "public")
+
+    # Build description with hashtags
+    description = caption
+    if hashtags:
+        description = caption + chr(10) + chr(10) + hashtags
+
+
+    results = []
+    for plat in (platform if isinstance(platform, list) else [platform]):
+        try:
+            if plat == "youtube":
+                outcome = publishing.youtube_publish(
+                    file_path=output_path,
+                    title=title,
+                    description=description,
+                    privacy_status=privacy,
+                )
+            elif plat == "instagram":
+                outcome = publishing.instagram_publish(
+                    file_path=output_path,
+                    caption=f"{caption} {hashtags}".strip(),
+                )
+            else:
+                raise HTTPException(status_code=400, detail=f"Unknown platform: {plat}")
+            results.append({"platform": plat, "status": "published", "url": outcome.get("url", "")})
+        except publishing.PublishError as exc:
+            results.append({"platform": plat, "status": "failed", "error": str(exc)})
+        except Exception as exc:
+            results.append({"platform": plat, "status": "failed", "error": str(exc)})
+
+    return {"project_id": project_id, "results": results}
+
 
 @app.get("/api/export/jobs/{job_id}/download")
 def download_export(job_id: str):
