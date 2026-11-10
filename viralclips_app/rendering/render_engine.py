@@ -228,119 +228,58 @@ def _compute_duration(timeline: list) -> float:
     return max(c.get("end", 0) for c in timeline)
 
 
-def _build_ffmpeg_command(timeline: list, config: dict, output_path: str, duration: float) -> list:
-    """Build an FFmpeg command from timeline data.
-
-    For now, this handles single-clip and sequential multi-clip exports.
-    Complex multi-track compositing is built incrementally.
-    """
+def _build_ffmpeg_command(timeline, config, output_path, duration):
+    import tempfile
     width = config.get("width", 1080)
     height = config.get("height", 1920)
     fps = config.get("fps", 30)
     quality = config.get("quality", "high")
-
-    # CRF based on quality
     crf_map = {"draft": "28", "standard": "23", "high": "18", "maximum": "14"}
     crf = crf_map.get(quality, "18")
     audio_bitrate = config.get("audio_bitrate", "192k")
-
-    if not timeline:
-        # Generate empty video
-        return [
-            FFMPEG_BIN, "-y",
-            "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:r={fps}:d={max(duration, 1)}",
-            "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo",
-            "-t", str(max(duration, 1)),
-            "-c:v", "libx264", "-preset", "medium", "-crf", crf,
-            "-c:a", "aac", "-b:a", audio_bitrate,
-            "-shortest", output_path,
-        ]
-
-    # Single clip or sequential clips
-    # For simplicity, handle the first video clip
-    video_clips = [c for c in timeline if c.get("type") not in ("audio", "caption", "text")]
-    audio_clips = [c for c in timeline if c.get("type") == "audio"]
-    caption_clips = [c for c in timeline if c.get("type") in ("caption", "text")]
-
+    video_clips = [c for c in (timeline or []) if c.get("type") not in ("audio", "caption", "text")]
     if not video_clips:
-        # No video, generate black
-        cmd = [
-            FFMPEG_BIN, "-y",
-            "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:r={fps}:d={max(duration, 1)}",
-        ]
-        # Add audio if present
-        if audio_clips:
-            for ac in audio_clips:
-                src = ac.get("src", "")
-                if src and not src.startswith("blob:"):
-                    cmd += ["-i", src]
-        cmd += ["-t", str(max(duration, 1)), "-c:v", "libx264", "-preset", "medium", "-crf", crf,
-                "-c:a", "aac", "-b:a", audio_bitrate, "-shortest", output_path]
+        cmd = [FFMPEG_BIN, "-y", "-f", "lavfi", "-i", "color=c=black:s={}x{}:r={}:d={}".format(width, height, fps, max(duration, 1))]
+        cmd += ["-t", str(max(duration, 1)), "-c:v", "libx264", "-preset", "medium", "-crf", crf, "-r", str(fps), "-an", output_path]
         return cmd
-
-    # Single video clip export (most common case)
     clip = video_clips[0]
-    src = clip.get("src", "")
-    # Resolve source path
-    if src and src.startswith("/media/clip/"):
-        # Extract clip ID and resolve
-        clip_id = src.split("/")[-1]
-        src = None  # Will be resolved below
-    elif src and src.startswith("blob:"):
-        src = None
-
-    # For clips from the library, we need to get the file path
-    # The src might be a media URL - resolve it
-    if src is None:
-        # Try to find the source file from the clip's sourceClipId
-        source_clip_id = clip.get("sourceClipId")
-        if source_clip_id:
-            # This is a library clip - need to resolve path
-            pass
-
-    # Build trim parameters
     trim_start = clip.get("trimStart", 0)
     trim_end = clip.get("trimEnd", clip.get("end", 10) - clip.get("start", 0))
-    clip_duration = trim_end - trim_start
-
-    # Build filter for transforms
+    clip_duration = max(0.1, trim_end - trim_start)
+    src = clip.get("src", "")
+    # Build filter
     filters = []
-    # Crop
-    crop_top = clip.get("cropTop", 0)
-    crop_bottom = clip.get("cropBottom", 0)
-    crop_left = clip.get("cropLeft", 0)
-    crop_right = clip.get("cropRight", 0)
-    if crop_top or crop_bottom or crop_left or crop_right:
-        # Convert percentages to pixels (approximate)
-        filters.append(f"crop=iw*{1-crop_left/100-crop_right/100}:ih*{1-crop_top/100-crop_bottom/100}:iw*{crop_left/100}:ih*{crop_top/100}")
-
-    # Scale
+    ct = clip.get("cropTop", 0); cb = clip.get("cropBottom", 0)
+    cl = clip.get("cropLeft", 0); cr2 = clip.get("cropRight", 0)
+    if ct or cb or cl or cr2:
+        l = cl/100.0; r = cr2/100.0; t = ct/100.0; b = cb/100.0
+        filters.append("crop=iw*{:.4f}:ih*{:.4f}:iw*{:.4f}:ih*{:.4f}".format(max(0.01,1-l-r), max(0.01,1-t-b), l, t))
     scale = clip.get("scale", 1)
-    if scale != 1:
-        filters.append(f"scale=iw*{scale}:ih*{scale}")
-
-    # Rotation
+    if scale and scale != 1:
+        filters.append("scale=iw*{:.4f}:ih*{:.4f}".format(scale, scale))
     rotation = clip.get("rotation", 0)
-    if rotation != 0:
-        filters.append(f"rotate={rotation}*PI/180")
-
-    # Build input
-    if src and Path(src).is_file():
-        cmd = [FFMPEG_BIN, "-y", "-ss", str(trim_start), "-i", src, "-t", str(clip_duration)]
+    if rotation:
+        filters.append("rotate={}*PI/180:fillcolor=black@0".format(rotation))
+    filters.append("scale={}:{}:force_original_aspect_ratio=decrease".format(width, height))
+    filters.append("pad={}:{}:(ow-iw)/2:(oh-ih)/2:black".format(width, height))
+    opacity = clip.get("opacity", 1)
+    if opacity < 1:
+        filters.append("format=rgba,colorchannelmixer=aa={}".format(opacity))
+    text = clip.get("text", "")
+    if text:
+        font_size = clip.get("fontSize", 24)
+        color = clip.get("textColor", "white")
+        safe_text = text.replace(chr(39), "\\'").replace(":", "\:") 
+        filters.append("drawtext=fontfile='data/arial.ttf':text='{}':fontsize={}:fontcolor={}:x=(w-text_w)/2:y=h-th-50".format(safe_text, font_size, color))
+    vf = ",".join(filters)
+    if src and not src.startswith("blob:") and Path(src).is_file():
+        cmd = [FFMPEG_BIN, "-y", "-ss", str(trim_start), "-i", src, "-t", str(clip_duration), "-vf", vf, "-c:v", "libx264", "-preset", "medium", "-crf", crf, "-r", str(fps)]
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
+        cmd += [output_path]
+        return cmd
     else:
-        # Fallback: generate test pattern
-        cmd = [FFMPEG_BIN, "-y", "-f", "lavfi", "-i", f"color=c=blue:s={width}x{height}:r={fps}:d={clip_duration}"]
+        return [FFMPEG_BIN, "-y", "-f", "lavfi", "-i", "color=c=blue:s={}x{}:r={}:d={}".format(width, height, fps, clip_duration), "-vf", vf, "-c:v", "libx264", "-preset", "medium", "-crf", crf, "-r", str(fps), "-an", output_path]
 
-    # Add video filters
-    if filters:
-        cmd += ["-vf", ",".join(filters)]
-
-    # Add audio
-    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", crf,
-            "-c:a", "aac", "-b:a", audio_bitrate,
-            "-r", str(fps), output_path]
-
-    return cmd
 
 
 def _parse_progress(line: str, duration: float) -> Optional[float]:
