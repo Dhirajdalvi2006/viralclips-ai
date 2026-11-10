@@ -279,6 +279,47 @@ def _build_ffmpeg_command(timeline, config, output_path, duration):
         cmd = [FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list), "-c:v", "libx264", "-preset", "medium", "-crf", crf, "-r", str(fps), "-an", output_path]
         return cmd
 
+    # Multi-clip handling
+    if len(video_clips) > 1:
+        import tempfile, subprocess as sp
+        concat_dir = Path(tempfile.gettempdir()) / "viralclips_render"
+        concat_dir.mkdir(parents=True, exist_ok=True)
+        concat_list = concat_dir / "concat_{}.txt".format(int(time.time()))
+        with open(concat_list, "w") as fh:
+            for i, clip in enumerate(video_clips):
+                trim_start = clip.get("trimStart", 0)
+                trim_end = clip.get("trimEnd", clip.get("end", 10) - clip.get("start", 0))
+                clip_duration = max(0.1, trim_end - trim_start)
+                src = clip.get("src", "")
+                norm_file = concat_dir / "norm_{}.mp4".format(i)
+                if src and not src.startswith("blob:") and Path(src).is_file():
+                    filters = []
+                    ct = clip.get("cropTop", 0); cb = clip.get("cropBottom", 0)
+                    cl = clip.get("cropLeft", 0); cr2 = clip.get("cropRight", 0)
+                    if ct or cb or cl or cr2:
+                        l = cl/100.0; r = cr2/100.0; t = ct/100.0; b = cb/100.0
+                        filters.append("crop=iw*{:.4f}:ih*{:.4f}:iw*{:.4f}:ih*{:.4f}".format(max(0.01,1-l-r), max(0.01,1-t-b), l, t))
+                    scale = clip.get("scale", 1)
+                    if scale and scale != 1:
+                        filters.append("scale=iw*{:.4f}:ih*{:.4f}".format(scale, scale))
+                    rotation = clip.get("rotation", 0)
+                    if rotation:
+                        filters.append("rotate={}*PI/180:fillcolor=black@0".format(rotation))
+                    filters.append("scale={}:{}:force_original_aspect_ratio=decrease".format(width, height))
+                    filters.append("pad={}:{}:(ow-iw)/2:(oh-ih)/2:black".format(width, height))
+                    vf = ",".join(filters)
+                    sp.run([FFMPEG_BIN, "-y", "-ss", str(trim_start), "-i", src, "-t", str(clip_duration), "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-r", str(fps), "-pix_fmt", "yuv420p", "-an", str(norm_file)], capture_output=True)
+                    fh.write("file " + chr(39) + str(norm_file).replace(chr(92), "/") + chr(39) + chr(10))
+                else:
+                    placeholder = concat_dir / "placeholder_{}.mp4".format(i)
+                    sp.run([FFMPEG_BIN, "-y", "-f", "lavfi", "-i", "color=c=gray:s={}x{}:r={}:d={}".format(width, height, fps, clip_duration), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-r", str(fps), "-pix_fmt", "yuv420p", str(placeholder)], capture_output=True)
+                    fh.write("file " + chr(39) + str(placeholder).replace(chr(92), "/") + chr(39) + chr(10))
+                    fh.write("duration " + str(clip_duration) + chr(10))
+        crf_map = {"draft": "28", "standard": "23", "high": "18", "maximum": "14"}
+        crf = crf_map.get(config.get("quality", "high"), "18")
+        cmd = [FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list), "-c:v", "libx264", "-preset", "medium", "-crf", crf, "-r", str(fps), "-an", output_path]
+        return cmd
+
     if not video_clips:
         cmd = [FFMPEG_BIN, "-y", "-f", "lavfi", "-i", "color=c=black:s={}x{}:r={}:d={}".format(width, height, fps, max(duration, 1))]
         cmd += ["-t", str(max(duration, 1)), "-c:v", "libx264", "-preset", "medium", "-crf", crf, "-r", str(fps), "-an", output_path]
