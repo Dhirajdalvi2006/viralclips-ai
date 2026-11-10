@@ -3337,7 +3337,7 @@ registerRoute('ai',
 
 /* ══ CONNECTED ACCOUNTS ══════════════════════════════════════════════════ */
 
-registerRoute('accounts',
+registerRoute('connections',
   async () => api('/api/accounts'),
   (data) => {
     const frag = document.createDocumentFragment();
@@ -3429,6 +3429,9 @@ registerRoute('accounts',
   });
 
 /* ══ SETTINGS ════════════════════════════════════════════════════════════ */
+
+registerRoute('publish', async () => {}, renderPublish);
+registerRoute('history', async () => {}, renderHistory);
 
 registerRoute('settings',
   async () => {
@@ -3751,3 +3754,29 @@ async function boot() {
 }
 
 document.addEventListener('DOMContentLoaded', boot);
+
+function renderPublish() {
+  const v = document.getElementById('view');
+  const card = document.createElement('div');
+  card.className = 'card';
+  const h = document.createElement('h2');
+  h.textContent = 'Publish';
+  const p = document.createElement('p');
+  p.textContent = 'Publishing workflow — caption, hashtags, platform selection.';
+  card.appendChild(h);
+  card.appendChild(p);
+  v.replaceChildren(card);
+}
+
+function renderHistory() {
+  const v = document.getElementById('view');
+  const card = document.createElement('div');
+  card.className = 'card';
+  const h = document.createElement('h2');
+  h.textContent = 'History';
+  const p = document.createElement('p');
+  p.textContent = 'Publishing history will appear here.';
+  card.appendChild(h);
+  card.appendChild(p);
+  v.replaceChildren(card);
+}
