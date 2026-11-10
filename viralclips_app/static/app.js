@@ -3143,7 +3143,7 @@ registerRoute('connections',
 
 /* ══ SETTINGS ════════════════════════════════════════════════════════════ */
 
-registerRoute('publish', async () => {}, renderPublish);
+registerRoute('publish', async () => { const projects = await api('/api/projects'); return { projects: projects.projects || projects || [] }; }, renderPublish);
 registerRoute('history', async () => {}, renderHistory);
 
 registerRoute('settings',
@@ -3468,11 +3468,12 @@ async function boot() {
 
 document.addEventListener('DOMContentLoaded', boot);
 
-async function renderPublish() {
+async function renderPublish(data) {
   const v = document.getElementById('view');
   v.replaceChildren(el('div', { class: 'page-head' },
     el('div', {}, el('h1', { text: 'Publish' }),
       el('div', { class: 'sub', text: 'Write caption, select platforms, and publish.' }))));
+  const projects = (data && data.projects) || [];
   const accounts = await api('/api/accounts');
   const acct = accounts.accounts || {};
   const card = el('div', { class: 'card' },
@@ -3487,6 +3488,15 @@ async function renderPublish() {
           : el('span', { class: 'badge warn', text: 'not connected' }))),
       el('p', { class: 'note', style: 'margin-top:10px', text: 'Go to Connections to link your accounts before publishing.' })));
   v.append(card);
+
+  const projCard = el('div', { class: 'card', style: 'margin-top:16px' },
+    el('div', { class: 'card-head' }, el('h3', { text: 'Select Project' })),
+    el('div', { class: 'card-body' },
+      el('div', { class: 'field full' },
+        el('label', { text: 'Rendered project' }),
+        el('select', { id: 'pub-project' },
+          ...projects.map(p => el('option', { value: p.id, text: p.name || ('Project ' + p.id) }))))));
+  v.append(projCard);
 
   const captionCard = el('div', { class: 'card', style: 'margin-top:16px' },
     el('div', { class: 'card-head' }, el('h3', { text: 'Caption & Hashtags' })),
@@ -3513,12 +3523,24 @@ async function renderPublish() {
     onclick: async () => {
       const caption = document.getElementById('pub-caption').value;
       const hashtags = document.getElementById('pub-hashtags').value;
+      if (!caption.trim()) { toast('Caption is required.', 'err'); return; }
+      const projectId = document.getElementById('pub-project') && document.getElementById('pub-project').value;
+      if (!projectId) { toast('Select a project to publish.', 'err'); return; }
       const platforms = [];
       if (document.getElementById('pub-youtube').checked) platforms.push('youtube');
       if (document.getElementById('pub-instagram').checked) platforms.push('instagram');
-      if (!caption.trim()) { toast('Caption is required.', 'err'); return; }
       if (platforms.length === 0) { toast('Select at least one platform.', 'err'); return; }
-      toast('Publishing requires an approved clip. Use the Editor to approve and render first.', 'warn');
+      try {
+        const result = await api('/api/projects/' + projectId + '/publish', {
+          method: 'POST',
+          body: { platform: platforms, caption, hashtags, title: caption.slice(0, 100), privacy_status: 'public' },
+        });
+        for (const r of (result.results || [])) {
+          if (r.status === 'published') toast('Published to ' + r.platform + ': ' + (r.url || ''), 'ok');
+          else toast(r.platform + ' failed: ' + (r.error || 'unknown'), 'err');
+        }
+        render();
+      } catch (e) { toast(e.message, 'err'); }
     }}, 'Publish');
   v.append(publishBtn);
 }
