@@ -3755,28 +3755,97 @@ async function boot() {
 
 document.addEventListener('DOMContentLoaded', boot);
 
-function renderPublish() {
+async function renderPublish() {
   const v = document.getElementById('view');
-  const card = document.createElement('div');
-  card.className = 'card';
-  const h = document.createElement('h2');
-  h.textContent = 'Publish';
-  const p = document.createElement('p');
-  p.textContent = 'Publishing workflow — caption, hashtags, platform selection.';
-  card.appendChild(h);
-  card.appendChild(p);
-  v.replaceChildren(card);
+  v.replaceChildren(el('div', { class: 'page-head' },
+    el('div', {}, el('h1', { text: 'Publish' }),
+      el('div', { class: 'sub', text: 'Write caption, select platforms, and publish.' }))));
+  const accounts = await api('/api/accounts');
+  const acct = accounts.accounts || {};
+  const card = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h3', { text: 'Connected Accounts' })),
+    el('div', { class: 'card-body' },
+      el('div', { class: 'kv' },
+        el('dt', { text: 'YouTube' }), el('dd', {}, acct.youtube && acct.youtube.connected
+          ? el('span', { class: 'badge ok', text: acct.youtube.channel_title || 'connected' })
+          : el('span', { class: 'badge warn', text: 'not connected' })),
+        el('dt', { text: 'Instagram' }), el('dd', {}, acct.instagram && acct.instagram.connected
+          ? el('span', { class: 'badge ok', text: acct.instagram.display_name || 'connected' })
+          : el('span', { class: 'badge warn', text: 'not connected' }))),
+      el('p', { class: 'note', style: 'margin-top:10px', text: 'Go to Connections to link your accounts before publishing.' })));
+  v.append(card);
+
+  const captionCard = el('div', { class: 'card', style: 'margin-top:16px' },
+    el('div', { class: 'card-head' }, el('h3', { text: 'Caption & Hashtags' })),
+    el('div', { class: 'card-body' },
+      el('div', { class: 'field full' },
+        el('label', { text: 'Caption' }),
+        el('textarea', { id: 'pub-caption', rows: 4, placeholder: 'Write your caption...' })),
+      el('div', { class: 'field full', style: 'margin-top:10px' },
+        el('label', { text: 'Hashtags' }),
+        el('input', { type: 'text', id: 'pub-hashtags', placeholder: '#hashtag1 #hashtag2' })),
+      el('div', { style: 'margin-top:10px', class: 'note', text: 'Character count: 0 / 2200' })));
+  v.append(captionCard);
+
+  const platformCard = el('div', { class: 'card', style: 'margin-top:16px' },
+    el('div', { class: 'card-head' }, el('h3', { text: 'Platforms' })),
+    el('div', { class: 'card-body' },
+      el('label', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:8px' },
+        el('input', { type: 'checkbox', id: 'pub-youtube' }), 'YouTube Shorts'),
+      el('label', { style: 'display:flex;align-items:center;gap:8px' },
+        el('input', { type: 'checkbox', id: 'pub-instagram' }), 'Instagram Reels')));
+  v.append(platformCard);
+
+  const publishBtn = el('button', { class: 'btn primary', style: 'margin-top:16px',
+    onclick: async () => {
+      const caption = document.getElementById('pub-caption').value;
+      const hashtags = document.getElementById('pub-hashtags').value;
+      const platforms = [];
+      if (document.getElementById('pub-youtube').checked) platforms.push('youtube');
+      if (document.getElementById('pub-instagram').checked) platforms.push('instagram');
+      if (!caption.trim()) { toast('Caption is required.', 'err'); return; }
+      if (platforms.length === 0) { toast('Select at least one platform.', 'err'); return; }
+      toast('Publishing requires an approved clip. Use the Editor to approve and render first.', 'warn');
+    }}, 'Publish');
+  v.append(publishBtn);
 }
 
-function renderHistory() {
+async function renderHistory() {
   const v = document.getElementById('view');
-  const card = document.createElement('div');
-  card.className = 'card';
-  const h = document.createElement('h2');
-  h.textContent = 'History';
-  const p = document.createElement('p');
-  p.textContent = 'Publishing history will appear here.';
-  card.appendChild(h);
-  card.appendChild(p);
-  v.replaceChildren(card);
+  v.replaceChildren(el('div', { class: 'page-head' },
+    el('div', {}, el('h1', { text: 'Publishing History' }),
+      el('div', { class: 'sub', text: 'Track your published videos.' }))));
+  try {
+    const data = await api('/api/publishing/calendar');
+    const items = data.items || [];
+    if (items.length === 0) {
+      v.append(el('div', { class: 'card' },
+        el('div', { class: 'card-body' },
+          el('p', { text: 'No published videos yet.' }))));
+      return;
+    }
+    const table = el('table', { class: 'data-table' });
+    const thead = el('thead', {}, el('tr', {},
+      el('th', { text: 'Title' }), el('th', { text: 'Platform' }),
+      el('th', { text: 'Published' }), el('th', { text: 'Status' }),
+      el('th', { text: 'URL' })));
+    table.append(thead);
+    const tbody = el('tbody');
+    for (const item of items) {
+      tbody.append(el('tr', {},
+        el('td', { text: item.title || '—' }),
+        el('td', { text: item.platform || '—' }),
+        el('td', { text: item.published_at ? fmtDateTime(item.published_at) : '—' }),
+        el('td', {}, statusBadge(item.status || 'unknown')),
+        el('td', {}, item.url
+          ? el('a', { href: item.url, target: '_blank', text: 'View' })
+          : el('span', { text: '—' }))));
+    }
+    table.append(tbody);
+    v.append(el('div', { class: 'card' }, el('div', { class: 'card-body' }, table)));
+  } catch (e) {
+    v.append(el('div', { class: 'card' },
+      el('div', { class: 'card-body' },
+        el('p', { class: 'note err', text: e.message }))));
+  }
 }
